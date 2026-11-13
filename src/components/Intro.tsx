@@ -1,13 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
-import { SERIES } from '../lib/color.ts';
+import { useMemo, useRef, useState } from 'react';
+import gsap from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import { useGSAP } from '@gsap/react';
+import { rampPosition, SERIES } from '../lib/color.ts';
 import { fmtPct } from '../lib/format.ts';
-import type { CountrySummary, SeamMode } from '../lib/types.ts';
+import { drawRings } from '../lib/rings.ts';
+import { dayIndex, FIRST_DAY, type Calendar } from '../lib/time.ts';
+import type { CountrySummary, GlobeView, IntroStory, SeamMode } from '../lib/types.ts';
+
+gsap.registerPlugin(ScrollTrigger, useGSAP);
 
 interface Props {
   summary: CountrySummary[];
-  onStep: (step: number) => void;
+  story: IntroStory;
+  cal: Calendar;
+  onView: (view: GlobeView) => void;
   onOpen: (slug: string) => void;
 }
+
+const SEAM_YEAR = 2012;
+// Scroll progress through the pinned scene: the rings finish growing at REVEAL,
+// then the raw record is blended into the harmonized one between BLEND_0 and BLEND_1.
+const REVEAL = 0.6;
+const BLEND_0 = 0.7;
+const BLEND_1 = 0.86;
+const TITLE = 'Ember Almanac';
+
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
 /** Yearly totals as bars: raw record with its 2012 jump, or the harmonized one. */
 export function SeamBars({ country, mode }: { country: CountrySummary; mode: SeamMode }) {
@@ -26,9 +45,9 @@ export function SeamBars({ country, mode }: { country: CountrySummary; mode: Sea
       >
         {years.map((y) => {
           const v = mode === 'raw' ? y.raw : y.harmonized;
-          const color = mode === 'harmonized' ? SERIES.harmonized : y.year < 2012 ? SERIES.modis : SERIES.viirs;
+          const color = mode === 'harmonized' ? SERIES.harmonized : y.year < SEAM_YEAR ? SERIES.modis : SERIES.viirs;
           return (
-            <span key={y.year} className={y.year === 2012 ? 'seam-col seam-first' : 'seam-col'}>
+            <span key={y.year} className={y.year === SEAM_YEAR ? 'seam-col seam-first' : 'seam-col'}>
               <i style={{ height: `${Math.max(1.5, (v / max) * 100)}%`, background: color }} />
             </span>
           );
@@ -36,7 +55,7 @@ export function SeamBars({ country, mode }: { country: CountrySummary; mode: Sea
       </div>
       <div className="seam-axis" aria-hidden="true">
         <span>{first}</span>
-        <span className="seam-mark">2012 · VIIRS arrives</span>
+        <span className="seam-mark">{SEAM_YEAR} · VIIRS arrives</span>
         <span>{last}</span>
       </div>
       <ul className="legend" aria-label="Legend">
@@ -53,71 +72,273 @@ export function SeamBars({ country, mode }: { country: CountrySummary; mode: Sea
   );
 }
 
-export function Intro({ summary, onStep, onOpen }: Props) {
-  const steps = useRef<(HTMLElement | null)[]>([]);
-  const [active, setActive] = useState(0);
-  const pt = summary.find((s) => s.slug === 'portugal') ?? summary[0];
+function robustMax(values: Float32Array): number {
+  const pos = Array.from(values).filter((v) => v > 0).sort((a, b) => a - b);
+  return pos.length ? pos[Math.min(pos.length - 1, Math.floor(pos.length * 0.995))] : 1;
+}
 
-  useEffect(() => {
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (e.isIntersecting) setActive(Number((e.target as HTMLElement).dataset.step));
+export function Intro({ summary, story, cal, onView, onOpen }: Props) {
+  const root = useRef<HTMLElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const ringsBox = useRef<HTMLDivElement>(null);
+  const veil = useRef<HTMLDivElement>(null);
+  const ticker = useRef<HTMLSpanElement>(null);
+  const fill = useRef<HTMLSpanElement>(null);
+  const [caption, setCaption] = useState(0);
+  const [bars, setBars] = useState<SeamMode>('raw');
+  const onViewRef = useRef(onView);
+  onViewRef.current = onView;
+
+  const pt = summary.find((s) => s.slug === story.slug) ?? summary[0];
+  const complete = pt.years.filter((y) => y.complete);
+  const topYear = complete.reduce((a, b) => (b.harmonized > a.harmonized ? b : a)).year;
+
+  // Ramp positions for both records, and the running count of raw detections.
+  const data = useMemo(() => {
+    const n = cal.nDays;
+    const raw = new Float32Array(n);
+    const harm = new Float32Array(n);
+    raw.set(story.raw.slice(0, n - story.firstDay), story.firstDay);
+    harm.set(story.harmonized.slice(0, n - story.firstDay), story.firstDay);
+    const rawMax = robustMax(raw);
+    const harmMax = robustMax(harm);
+    const rawT = new Float32Array(n);
+    const harmT = new Float32Array(n);
+    const seen = new Float64Array(n + 1);
+    for (let d = 0; d < n; d++) {
+      rawT[d] = rampPosition(raw[d], rawMax);
+      harmT[d] = rampPosition(harm[d], harmMax);
+      seen[d + 1] = seen[d] + raw[d];
+    }
+    return { rawT, harmT, seen };
+  }, [story, cal]);
+
+  /** Scroll progress at which the rings reach 1 January of `year`. */
+  const progressOf = (year: number) => (REVEAL * (dayIndex(year, 1, 1) - FIRST_DAY)) / (cal.nDays - FIRST_DAY);
+  const marks = [
+    { p: 0, label: String(cal.year[FIRST_DAY]), more: '' },
+    { p: progressOf(SEAM_YEAR), label: String(SEAM_YEAR), more: ' · VIIRS' },
+    { p: REVEAL, label: String(cal.year[cal.nDays - 1]), more: '' },
+    { p: (BLEND_0 + BLEND_1) / 2, label: 'Stitch', more: '' },
+  ];
+
+  useGSAP(
+    () => {
+      const el = root.current;
+      const canvas = canvasRef.current;
+      const box = ringsBox.current;
+      const ctx = canvas?.getContext('2d');
+      if (!el || !canvas || !box || !ctx) return;
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const scene = el.querySelector<HTMLElement>('.scene-rings')!;
+      const pick = el.querySelector<HTMLElement>('.scene-pick')!;
+      const { rawT, harmT, seen } = data;
+      const n = cal.nDays;
+      const mix = new Float32Array(n);
+      const state = { p: 0 };
+      let size = 0;
+      let dpr = 1;
+      let lastBlend = -1;
+      let lastKey = '';
+      let shownCaption = -1;
+      let shownBars: SeamMode | null = null;
+      const pTop = progressOf(topYear);
+      const pSeam = progressOf(SEAM_YEAR);
+
+      const render = () => {
+        if (size === 0) return;
+        const p = state.p;
+        const revealDay = FIRST_DAY + clamp01(p / REVEAL) * (n - FIRST_DAY);
+        const k = clamp01((p - BLEND_0) / (BLEND_1 - BLEND_0));
+        const blend = k * k * (3 - 2 * k);
+        const day = Math.max(FIRST_DAY + 1, Math.floor(revealDay));
+        const key = `${day}|${blend.toFixed(3)}|${size}`;
+        if (key !== lastKey) {
+          lastKey = key;
+          if (blend !== lastBlend) {
+            lastBlend = blend;
+            for (let d = FIRST_DAY; d < n; d++) mix[d] = rawT[d] + (harmT[d] - rawT[d]) * blend;
+          }
+          drawRings(ctx, {
+            size, dpr, cal, t: mix, revealDay: day, sel: null,
+            title: String(cal.year[day - 1]), subtitle: story.name,
+            seamYear: SEAM_YEAR, seamPhase: blend * 72, bigTitle: true,
+          });
+          if (ticker.current) ticker.current.textContent = Math.round(seen[day]).toLocaleString('en-US');
         }
-      },
-      { rootMargin: '-45% 0px -45% 0px' },
-    );
-    steps.current.forEach((el) => el && io.observe(el));
-    return () => io.disconnect();
-  }, []);
+        if (fill.current) fill.current.style.transform = `scaleX(${p})`;
+        const cap = p >= 0.9 ? 4 : p >= BLEND_0 - 0.03 ? 3 : p >= pSeam ? 2 : p >= pTop ? 1 : 0;
+        if (cap !== shownCaption) {
+          shownCaption = cap;
+          setCaption(cap);
+        }
+        const mode: SeamMode = blend >= 0.5 ? 'harmonized' : 'raw';
+        if (mode !== shownBars) {
+          shownBars = mode;
+          setBars(mode);
+        }
+      };
 
-  useEffect(() => onStep(active), [active, onStep]);
+      const resize = () => {
+        const r = box.getBoundingClientRect();
+        const next = Math.floor(Math.min(r.width, r.height, 680));
+        if (next <= 0 || next === size) return;
+        size = next;
+        dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+        canvas.width = Math.round(size * dpr);
+        canvas.height = Math.round(size * dpr);
+        canvas.style.width = `${size}px`;
+        canvas.style.height = `${size}px`;
+        lastKey = '';
+        render();
+      };
+      const ro = new ResizeObserver(resize);
+      ro.observe(box);
+      resize();
+      document.fonts?.ready.then(() => {
+        lastKey = '';
+        render();
+      });
 
-  const ref = (i: number) => (el: HTMLElement | null) => {
-    steps.current[i] = el;
-  };
-  const yearsOfData = pt.years.filter((y) => y.complete).length;
+      // Title rises letter by letter, then drifts away as the story starts.
+      if (!reduce) {
+        gsap.from('.hero-char', { yPercent: 118, duration: 1.1, ease: 'power4.out', stagger: 0.04, delay: 0.1 });
+        gsap.from('.hero-fade', { opacity: 0, y: 18, duration: 0.9, ease: 'power2.out', stagger: 0.14, delay: 0.75 });
+      }
+      gsap.to('.hero-inner', {
+        yPercent: -24, opacity: 0, ease: 'none',
+        scrollTrigger: { trigger: '.scene-hero', start: 'top top', end: 'bottom 40%', scrub: true },
+      });
+
+      // The rings roll in from below, then grow with the scroll.
+      gsap.from(box, {
+        scale: 0.5, rotate: -40, opacity: 0, ease: 'none',
+        scrollTrigger: { trigger: scene, start: 'top 85%', end: 'top top', scrub: true },
+      });
+      gsap.to(state, {
+        p: 1, ease: 'none', onUpdate: render,
+        scrollTrigger: { trigger: scene, start: 'top top', end: 'bottom bottom', scrub: reduce ? true : 0.6 },
+      });
+
+      // The veil darkens the globe while the rings have the stage.
+      const setVeil = () => {
+        const vh = window.innerHeight;
+        const enter = clamp01((0.9 * vh - scene.getBoundingClientRect().top) / (0.7 * vh));
+        const leave = clamp01((0.95 * vh - pick.getBoundingClientRect().top) / (0.6 * vh));
+        if (veil.current) veil.current.style.opacity = String(0.9 * enter * (1 - leave));
+      };
+      ScrollTrigger.create({ trigger: el, start: 'top top', end: 'bottom bottom', onUpdate: setVeil, onRefresh: setVeil });
+
+      // Tell the globe what to do: turn, rest under the veil, or settle for picking.
+      ScrollTrigger.create({
+        trigger: scene,
+        start: 'top 30%',
+        end: 'bottom 85%',
+        onEnter: () => onViewRef.current('hold'),
+        onEnterBack: () => onViewRef.current('hold'),
+        onLeave: () => onViewRef.current('pick'),
+        onLeaveBack: () => onViewRef.current('spin'),
+      });
+
+      return () => ro.disconnect();
+    },
+    { scope: root, dependencies: [data, cal, story, topYear] },
+  );
 
   return (
-    <main className="intro">
-      <button type="button" className="skip" onClick={() => onOpen('portugal')}>Skip to the almanac</button>
+    <main ref={root} className="intro">
+      <div ref={veil} className="veil" aria-hidden="true" />
+      <button type="button" className="skip" onClick={() => onOpen(story.slug)}>Skip to the almanac</button>
 
-      <section ref={ref(0)} data-step={0} className="step step-hero">
-        <p className="eyebrow">NASA Space Apps 2026 · MODIS and VIIRS hot spots</p>
-        <h1>Ember Almanac</h1>
-        <p className="hero-q">Is this fire season normal?</p>
-        <p className="hero-sub">
-          {yearsOfData} years of NASA fire detections for one place, stitched into a single record you can read like tree rings.
-        </p>
-        <p className="scroll-cue" aria-hidden="true">Scroll</p>
-      </section>
-
-      <section ref={ref(1)} data-step={1} className="step">
-        <div className="card">
-          <p className="eyebrow">The problem</p>
-          <h2>Two sensors. One broken record.</h2>
-          <p>
-            MODIS has watched for fire since 2000 with 1 km pixels. VIIRS took over in 2012 with 375 m pixels and sees far more.
-            Switch sensors without care and a typical year in {pt.name} appears to jump <strong>×{pt.seamStepRaw.toFixed(1)}</strong> overnight.
+      <section className="scene scene-hero">
+        <div className="hero-inner">
+          <p className="eyebrow hero-fade">NASA Space Apps 2026 · MODIS and VIIRS hot spots</p>
+          <h1 aria-label={TITLE}>
+            {TITLE.split(' ').map((word, w) => (
+              <span key={w} className="hero-word" aria-hidden="true">
+                {[...word].map((ch, i) => <span key={i} className="hero-char">{ch}</span>)}
+              </span>
+            ))}
+          </h1>
+          <p className="hero-q hero-fade">Is this fire season normal?</p>
+          <p className="hero-sub hero-fade">
+            {complete.length} years of NASA fire detections for one place, stitched into a single record you can read like tree rings.
           </p>
-          <SeamBars country={pt} mode="raw" />
+          <p className="scroll-cue hero-fade" aria-hidden="true">Scroll to grow the rings</p>
         </div>
       </section>
 
-      <section ref={ref(2)} data-step={2} className="step">
-        <div className="card">
-          <p className="eyebrow">The fix</p>
-          <h2>Stitched, then tested.</h2>
-          <p>
-            We count fire on a common 1 km grid, learn the conversion from the years both sensors flew, and check it on years the
-            model never saw. Monthly error in {pt.name} falls from <strong>{fmtPct(pt.validation.mdapeRaw)}</strong> to{' '}
-            <strong>{fmtPct(pt.validation.mdape)}</strong>.
-          </p>
-          <SeamBars country={pt} mode="harmonized" />
+      <section className="scene scene-rings" aria-label={`The fire record of ${story.name}, year by year`}>
+        <div className="stage">
+          <div ref={ringsBox} className="story-rings">
+            <canvas
+              ref={canvasRef}
+              role="img"
+              aria-label={`Fire rings for ${story.name} growing from ${cal.year[FIRST_DAY]} to ${cal.year[cal.nDays - 1]} as the page scrolls: one ring per year, brighter where more fire was detected.`}
+            />
+          </div>
+
+          <div className="story-text">
+            <p className="ticker" aria-hidden="true">
+              <span ref={ticker}>0</span> detections logged so far
+            </p>
+            <div className="captions" data-active={caption}>
+              <article>
+                <p className="eyebrow">{cal.year[FIRST_DAY]} onward</p>
+                <h2>Every ring is a year.</h2>
+                <p>
+                  Since November {cal.year[FIRST_DAY]}, NASA's MODIS has logged each fire it could see in {story.name}. One step around
+                  the ring is one day. Brighter means more fire.
+                </p>
+              </article>
+              <article>
+                <p className="eyebrow">{topYear}</p>
+                <h2>Some years leave a scar.</h2>
+                <p>
+                  {topYear} is the most active year in {story.name}'s record. Trees keep fire scars in their rings; this is the same
+                  idea, read from orbit.
+                </p>
+              </article>
+              <article>
+                <p className="eyebrow">{SEAM_YEAR} · the problem</p>
+                <h2>A sharper eye arrives. The record breaks.</h2>
+                <p>
+                  VIIRS swaps 1 km pixels for 375 m ones and catches fires MODIS missed. Past the dotted ring a typical year appears to
+                  jump <strong>×{pt.seamStepRaw.toFixed(1)}</strong>. Nothing on the ground changed.
+                </p>
+              </article>
+              <article>
+                <p className="eyebrow">The fix</p>
+                <h2>So we stitched it.</h2>
+                <p>
+                  Fire is counted on one 1 km grid, the conversion is learned from the years both sensors flew, and it is checked on
+                  years the model never saw. Monthly error falls from <strong>{fmtPct(pt.validation.mdapeRaw)}</strong> to{' '}
+                  <strong>{fmtPct(pt.validation.mdape)}</strong>.
+                </p>
+              </article>
+              <article>
+                <p className="eyebrow">One record</p>
+                <h2>Now ask it something.</h2>
+                <p>{complete.length} years, two sensors, one consistent record. Keep scrolling to pick a place.</p>
+              </article>
+            </div>
+            <div className="story-bars" data-show={caption >= 2 || undefined}>
+              <SeamBars country={pt} mode={bars} />
+            </div>
+          </div>
+
+          <div className="rail" aria-hidden="true">
+            <span className="rail-track"><span ref={fill} className="rail-fill" /></span>
+            {marks.map((m) => (
+              <span key={m.label} className="rail-mark" style={{ left: `${m.p * 100}%` }}>
+                {m.label}{m.more && <span className="rail-more">{m.more}</span>}
+              </span>
+            ))}
+          </div>
         </div>
       </section>
 
-      <section ref={ref(3)} data-step={3} className="step step-pick">
+      <section className="scene scene-pick">
         <div className="card">
           <p className="eyebrow">The almanac</p>
           <h2>Pick a place.</h2>

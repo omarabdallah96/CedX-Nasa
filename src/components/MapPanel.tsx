@@ -8,6 +8,7 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import type { Manifest } from '../lib/analysis.ts';
 import type { BBox } from '../lib/harmonize.ts';
 import { EMBER, SERIES } from '../lib/color.ts';
+import type { GlobeView } from '../lib/types.ts';
 import type { PointsResult } from '../worker/analysis.worker.ts';
 
 const GIBS =
@@ -56,8 +57,8 @@ function bboxPolygon(b: BBox): FeatureCollection {
 
 interface Props {
   phase: 'intro' | 'tool';
-  /** Intro only: spin the globe, or settle on the Mediterranean for picking. */
-  spin: boolean;
+  /** Intro only: what the globe is doing behind the story. */
+  view: GlobeView;
   countries: Manifest[];
   slug: string;
   bbox: BBox | null;
@@ -70,7 +71,7 @@ interface Props {
 }
 
 export function MapPanel(props: Props) {
-  const { phase, spin, countries, slug, bbox, drawing, onDraw, onPick, density, points, dataUrl } = props;
+  const { phase, view, countries, slug, bbox, drawing, onDraw, onPick, density, points, dataUrl } = props;
   const el = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const [ready, setReady] = useState(false);
@@ -201,8 +202,10 @@ export function MapPanel(props: Props) {
       return;
     }
     for (const h of [map.scrollZoom, map.dragPan, map.doubleClickZoom, map.touchZoomRotate, map.keyboard]) h.disable();
-    if (!spin || instant) {
-      const wide = window.innerWidth >= 1000;
+    // Under the veil the globe rests where it is.
+    if (view === 'hold') return;
+    if (view === 'pick' || instant) {
+      const wide = view === 'pick' && window.innerWidth >= 1000;
       map.easeTo({
         ...MED_VIEW,
         zoom: wide ? 3.3 : MED_VIEW.zoom,
@@ -226,15 +229,20 @@ export function MapPanel(props: Props) {
     return () => cancelAnimationFrame(raf);
     // bbox is handled below so drawing does not re-trigger the fly-in
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, spin, slug, countries, ready]);
+  }, [phase, view, slug, countries, ready]);
 
   // Selection rectangle.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
     (map.getSource('bbox') as GeoJSONSource).setData(bbox ? bboxPolygon(bbox) : EMPTY);
-    if (bbox && phase === 'tool') {
-      map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 64, duration: reducedMotion.current ? 0 : 900, maxZoom: 10 });
+    if (phase !== 'tool') return;
+    // Frame the drawn box, or go back to the whole country when it is cleared.
+    const target = bbox ?? countries.find((c) => c.slug === slug)?.focus;
+    if (target) {
+      map.fitBounds([[target[0], target[1]], [target[2], target[3]]], {
+        padding: bbox ? 64 : 48, duration: reducedMotion.current ? 0 : 900, maxZoom: 10,
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bbox, ready]);
@@ -322,7 +330,7 @@ export function MapPanel(props: Props) {
   }, [points, ready]);
 
   return (
-    <div className="map" data-phase={phase} data-drawing={drawing || undefined} data-pick={(phase === 'intro' && !spin) || undefined}>
+    <div className="map" data-phase={phase} data-drawing={drawing || undefined} data-pick={(phase === 'intro' && view === 'pick') || undefined}>
       <div ref={el} className="map-canvas" role="application" aria-label="Map of fire hotspots" />
       {failed && (
         <p className="map-failed" role="alert">

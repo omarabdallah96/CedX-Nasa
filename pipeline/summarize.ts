@@ -7,6 +7,7 @@ import { OUT_DIR } from './config.mjs';
 import { analyze, buildContext, type DatasetIndex } from '../src/lib/analysis.ts';
 import { unpackHotspots } from '../src/lib/harmonize.ts';
 import { annualTotals } from '../src/lib/stats.ts';
+import { FIRST_DAY } from '../src/lib/time.ts';
 
 const index = JSON.parse(await readFile(path.join(OUT_DIR, 'index.json'), 'utf8')) as DatasetIndex;
 const round = (v: number, digits = 2) => (Number.isFinite(v) ? Number(v.toFixed(digits)) : null);
@@ -17,11 +18,20 @@ const median = (a: number[]) => {
 };
 
 const summary = [];
+// Daily series of the first country, for the scroll story on the home screen.
+let story: { slug: string; name: string; firstDay: number; raw: number[]; harmonized: number[] } | null = null;
 for (const man of index.countries) {
   const b = await readFile(path.join(OUT_DIR, `${man.slug}.bin`));
   const h = unpackHotspots(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer, man.n);
   const flags = { vegOnly: true, dropLowConf: true };
   const a = analyze(h, { ...flags, bbox: null }, buildContext(h, flags, index));
+  story ??= {
+    slug: man.slug,
+    name: man.name,
+    firstDay: FIRST_DAY,
+    raw: Array.from(a.naive.subarray(FIRST_DAY)),
+    harmonized: Array.from(a.harmonized.h.subarray(FIRST_DAY), (v) => Math.round(v * 10) / 10),
+  };
   const harmonized = annualTotals(a.monthsH);
   const naive = annualTotals(a.monthsNaive);
   // Apparent jump in a typical year across the 2012 sensor switch.
@@ -53,3 +63,4 @@ for (const man of index.countries) {
   );
 }
 await writeFile(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary));
+await writeFile(path.join(OUT_DIR, 'intro.json'), JSON.stringify(story));

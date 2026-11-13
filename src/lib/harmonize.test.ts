@@ -8,6 +8,7 @@ import {
 } from './harmonize.ts';
 import { annualTotals, judge, monthVerdict, peakSeason, yearVerdict } from './stats.ts';
 import { AQUA_DAY, buildCalendar, dayIndex, isoDate, SEAM_DAY } from './time.ts';
+import { parseBox, parseCoord } from './coords.ts';
 
 const ALL: Filters = { vegOnly: true, dropLowConf: true, bbox: null };
 
@@ -174,6 +175,28 @@ describe('verdict', () => {
     expect(peakSeason([0, 0, 0, 0, 0, 1, 5, 8, 4, 1, 0, 0])).toMatchObject({ start: 6, length: 2 });
     expect(peakSeason([6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 6])).toMatchObject({ start: 11, length: 2 });
     expect(peakSeason(new Array(12).fill(0))).toBeNull();
+  });
+});
+
+describe('typed coordinates', () => {
+  it('reads the formats people type', () => {
+    expect(parseCoord('-8.6')).toBe(-8.6);
+    expect(parseCoord(' 8,6 W ')).toBe(-8.6);
+    expect(parseCoord('39.6°N')).toBe(39.6);
+    expect(parseCoord('12 s')).toBe(-12);
+    expect(parseCoord('+35')).toBe(35);
+    expect(parseCoord('.5')).toBe(0.5);
+    for (const bad of ['', 'abc', '8.6.1', '-8 E', '8 Q', '1e3', '8 6']) expect(parseCoord(bad)).toBeNaN();
+  });
+
+  it('validates a box against its country', () => {
+    const pt = { name: 'Portugal', bbox: [-28.8, 30.1, -6.2, 42.1] as [number, number, number, number] };
+    expect(parseBox(['-8,6', '39.6', '7.4 W', '40.6 N'], pt)).toEqual({ ok: true, bbox: [-8.6, 39.6, -7.4, 40.6] });
+    expect(parseBox(['', '39.6', '-7.4', 'x'], pt)).toMatchObject({ ok: false, fields: [0, 3] });
+    expect(parseBox(['-7', '39.6', '-8', '40.6'], pt)).toMatchObject({ ok: false, fields: [0, 2] });
+    expect(parseBox(['-8', '41', '-7', '40'], pt)).toMatchObject({ ok: false, fields: [1, 3] });
+    expect(parseBox(['-8', '39', '-7', '95'], pt)).toMatchObject({ ok: false, fields: [1, 3] });
+    expect(parseBox(['20', '39', '25', '40'], pt)).toMatchObject({ ok: false, fields: [0, 1, 2, 3] });
   });
 });
 

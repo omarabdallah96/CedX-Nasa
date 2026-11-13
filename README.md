@@ -58,7 +58,7 @@ The factor differs fourfold between these four countries, which is why it is fit
 
 ```
 pipeline/   fetch-firms.mjs · pack.mjs · boundaries.mjs · summarize.ts
-src/lib/    harmonize.ts · stats.ts · analysis.ts · time.ts   (+ harmonize.test.ts)
+src/lib/    harmonize.ts · stats.ts · analysis.ts · rings.ts · coords.ts · time.ts   (+ harmonize.test.ts)
 src/worker/ analysis.worker.ts   runs the analysis off the main thread
 src/components/  MapPanel · Verdict · FireRings · BurnCalendar · SeasonChart · TrustPanel · ExportMenu · Intro
 ```
@@ -68,7 +68,7 @@ src/components/  MapPanel · Verdict · FireRings · BurnCalendar · SeasonChart
 - Hotspots: [NASA FIRMS](https://www.earthdata.nasa.gov/data/tools/firms) yearly country archive, MODIS (Terra, Aqua) and VIIRS (Suomi NPP).
 - Imagery: NASA GIBS, Blue Marble Shaded Relief and Bathymetry.
 - Borders: Natural Earth (public domain).
-- Libraries: React, Vite, MapLibre GL JS, d3-scale, d3-shape; fonts Fraunces and IBM Plex.
+- Libraries: React, Vite, MapLibre GL JS, GSAP (ScrollTrigger), d3-scale, d3-shape; fonts Fraunces and IBM Plex.
 
 An independent project, not a NASA product.
 

@@ -16,3 +16,15 @@ export interface CountrySummary {
 }
 
 export type SeamMode = 'harmonized' | 'raw';
+
+/** Daily series behind the home-screen scroll story, starting at `firstDay`. */
+export interface IntroStory {
+  slug: string;
+  name: string;
+  firstDay: number;
+  raw: number[];
+  harmonized: number[];
+}
+
+/** What the globe does behind the intro: turn, rest under the veil, or settle for picking. */
+export type GlobeView = 'spin' | 'hold' | 'pick';

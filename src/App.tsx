@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DatasetIndex } from './lib/analysis.ts';
 import { AnalysisClient } from './lib/client.ts';
+import { EDGES, parseBox } from './lib/coords.ts';
 import { fmtCount } from './lib/format.ts';
 import { SRC_GAPFILL, SRC_MODIS, SRC_TERRA, type BBox, type Filters } from './lib/harmonize.ts';
 import { completeYears, monthVerdict, seamStep } from './lib/stats.ts';
 import { buildCalendar, dayIndex, FIRST_DAY, isoDate, MONTHS, MONTHS_LONG, SEAM_DAY } from './lib/time.ts';
-import type { CountrySummary, SeamMode } from './lib/types.ts';
+import type { CountrySummary, GlobeView, IntroStory, SeamMode } from './lib/types.ts';
 import type { AnalyzeResult, PointsResult } from './worker/analysis.worker.ts';
 import { BurnCalendar } from './components/BurnCalendar.tsx';
 import { ExportMenu } from './components/ExportMenu.tsx';
@@ -38,12 +39,13 @@ export function App() {
   const initial = useMemo(readHash, []);
   const [phase, setPhase] = useState<'intro' | 'tool'>(initial.phase);
   const [slug, setSlug] = useState(initial.slug ?? 'portugal');
-  const [introStep, setIntroStep] = useState(0);
+  const [story, setStory] = useState<IntroStory | null>(null);
+  const [globeView, setGlobeView] = useState<GlobeView>('spin');
   const [flags, setFlags] = useState({ vegOnly: true, dropLowConf: true });
   const [bbox, setBBox] = useState<BBox | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [boxText, setBoxText] = useState(['', '', '', '']);
-  const [boxError, setBoxError] = useState<string | null>(null);
+  const [boxError, setBoxError] = useState<{ message: string; fields: number[] } | null>(null);
   const [result, setResult] = useState<{ key: string; data: AnalyzeResult } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -60,11 +62,12 @@ export function App() {
       if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
       return (await res.json()) as T;
     };
-    Promise.all([get<DatasetIndex>('index.json'), get<CountrySummary[]>('summary.json')]).then(
-      ([i, s]) => {
+    Promise.all([get<DatasetIndex>('index.json'), get<CountrySummary[]>('summary.json'), get<IntroStory>('intro.json')]).then(
+      ([i, s, st]) => {
         if (!alive) return;
         setIndex(i);
         setSummary(s);
+        setStory(st);
         setSlug((cur) => (i.countries.some((c) => c.slug === cur) ? cur : i.countries[0].slug));
       },
       (err: unknown) => alive && setBootError(err instanceof Error ? err.message : String(err)),
@@ -77,9 +80,12 @@ export function App() {
   useEffect(() => {
     const target = phase === 'tool' ? `#/${slug}` : '';
     if (window.location.hash !== target) history.replaceState(null, '', target || window.location.pathname + window.location.search);
-    if (phase === 'tool') window.scrollTo({ top: 0 });
+    // 'instant' overrides the page's smooth scrolling: the tool must open at its top.
+    if (phase === 'tool') window.scrollTo({ top: 0, behavior: 'instant' });
   }, [phase, slug]);
 
+  const country = index?.countries.find((c) => c.slug === slug) ?? null;
+  const place = country ? (bbox ? `the selected area of ${country.name}` : country.name) : '';
   const filters: Filters = useMemo(() => ({ ...flags, bbox }), [flags, bbox]);
   const key = `${slug}|${flags.vegOnly}|${flags.dropLowConf}|${bbox?.join(',') ?? 'all'}`;
 
@@ -102,8 +108,6 @@ export function App() {
   const cal = useMemo(() => (index ? buildCalendar(index.coverageEndDay + 1) : null), [index]);
   const analysis = result?.data.analysis ?? null;
   const stale = result !== null && result.key !== key;
-  const country = index?.countries.find((c) => c.slug === slug) ?? null;
-  const place = country ? (bbox ? `the selected area of ${country.name}` : country.name) : '';
 
   const sel: Selection | null = useMemo(() => {
     if (picked) return picked;
@@ -134,23 +138,28 @@ export function App() {
     setPhase('tool');
   }, []);
 
+  // The four fields always show the box in use: the drawn one, or the country's own.
+  const shownBox = bbox ?? country?.focus ?? null;
+  const shownBoxKey = shownBox?.join(',') ?? '';
+  useEffect(() => {
+    setBoxText(shownBox ? shownBox.map(String) : ['', '', '', '']);
+    setBoxError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownBoxKey]);
+  const boxEdited = shownBox !== null && boxText.some((t, i) => t.trim() !== String(shownBox[i]));
+
   const applyBox = (b: BBox | null) => {
     setBBox(b);
     setDrawing(false);
     setBoxError(null);
-    setBoxText(b ? b.map((v) => String(v)) : ['', '', '', '']);
   };
 
   const submitBox = (e: React.FormEvent) => {
     e.preventDefault();
-    const [w, s, east, n] = boxText.map((t) => Number(t.trim()));
-    if (boxText.some((t) => t.trim() === '') || [w, s, east, n].some((v) => !Number.isFinite(v))) {
-      return setBoxError('Enter all four edges as decimal degrees, for example West -8.6.');
-    }
-    if (w < -180 || east > 180 || s < -90 || n > 90) return setBoxError('Longitude runs from -180 to 180 and latitude from -90 to 90.');
-    if (w >= east) return setBoxError('West must be smaller than East.');
-    if (s >= n) return setBoxError('South must be smaller than North.');
-    applyBox([w, s, east, n]);
+    if (!country || !boxEdited) return;
+    const r = parseBox(boxText, country);
+    if (r.ok) applyBox(r.bbox);
+    else setBoxError({ message: r.message, fields: r.fields });
   };
 
   const series = analysis ? (mode === 'harmonized' ? analysis.harmonized.h : analysis.naive) : null;
@@ -183,6 +192,7 @@ export function App() {
     );
   }
 
+  const empty = analysis !== null && analysis.detections.modis + analysis.detections.viirs === 0;
   const verdict = analysis && sel ? monthVerdict(analysis.monthsH, sel.year, sel.month) : null;
   const baseline = analysis ? completeYears(analysis.monthsH) : [];
 
@@ -191,7 +201,7 @@ export function App() {
       {index && (
         <MapPanel
           phase={phase}
-          spin={introStep < 3}
+          view={globeView}
           countries={index.countries}
           slug={slug}
           bbox={bbox}
@@ -204,13 +214,13 @@ export function App() {
         />
       )}
 
-      {phase === 'intro' && summary && <Intro summary={summary} onStep={setIntroStep} onOpen={open} />}
-      {phase === 'intro' && !summary && <p className="boot">Loading the almanac…</p>}
+      {phase === 'intro' && summary && story && cal && <Intro summary={summary} story={story} cal={cal} onView={setGlobeView} onOpen={open} />}
+      {phase === 'intro' && !(summary && story && cal) && <p className="boot">Loading the almanac…</p>}
 
       {phase === 'tool' && index && cal && (
         <>
           <header className="head">
-            <a className="brand" href="#top" onClick={(e) => { e.preventDefault(); setPhase('intro'); setIntroStep(0); }}>
+            <a className="brand" href="#top" onClick={(e) => { e.preventDefault(); setPhase('intro'); setGlobeView('spin'); }}>
               <img src="./favicon.svg" alt="" width={26} height={26} />
               <span>Ember Almanac</span>
             </a>
@@ -228,6 +238,14 @@ export function App() {
                 <p className="eyebrow">Something went wrong</p>
                 <p className="verdict-text">{error}</p>
                 <button type="button" className="btn" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+              </div>
+            ) : analysis && empty ? (
+              <div className="verdict">
+                <p className="eyebrow">{place}</p>
+                <h2 className="verdict-answer">Nothing to judge.</h2>
+                <p className="verdict-text">
+                  No fire was detected inside this box in the whole record, so there is no normal to compare with. Draw a larger box or go back to the whole country.
+                </p>
               </div>
             ) : analysis && sel ? (
               <Verdict analysis={analysis} cal={cal} sel={sel} onSelect={setPicked} place={place} coverageEnd={`${Number(isoDate(index.coverageEndDay).slice(8))} ${MONTHS_LONG[cal.month[index.coverageEndDay]]} ${cal.year[index.coverageEndDay]}`} />
@@ -251,20 +269,32 @@ export function App() {
               </div>
               {drawing && <p className="note" role="status">Drag on the map from one corner to the opposite corner.</p>}
               <div className="area-inputs">
-                {['West', 'South', 'East', 'North'].map((label, i) => (
+                {EDGES.map((label, i) => (
                   <label key={label}>
-                    <span>{label}</span>
+                    <span>{label} <small>{i % 2 === 0 ? 'lon' : 'lat'}</small></span>
                     <input
-                      inputMode="decimal"
+                      type="text"
+                      autoComplete="off"
+                      autoCapitalize="characters"
+                      spellCheck={false}
+                      enterKeyHint="go"
                       value={boxText[i]}
-                      placeholder={country ? String(country.focus[i]) : ''}
-                      onChange={(e) => setBoxText((t) => t.map((v, k) => (k === i ? e.target.value : v)))}
+                      aria-invalid={boxError?.fields.includes(i) || undefined}
+                      aria-describedby={boxError ? 'box-error' : 'box-hint'}
+                      onChange={(e) => {
+                        setBoxError(null);
+                        setBoxText((t) => t.map((v, k) => (k === i ? e.target.value : v)));
+                      }}
                     />
                   </label>
                 ))}
-                <button type="submit" className="btn btn-quiet">Apply</button>
+                <button type="submit" className="btn btn-quiet" disabled={!boxEdited}>Apply</button>
               </div>
-              {boxError && <p className="form-error" role="alert">{boxError}</p>}
+              {boxError ? (
+                <p id="box-error" className="form-error" role="alert">{boxError.message}</p>
+              ) : (
+                <p id="box-hint" className="note">Edit any edge in decimal degrees (-8.6 or 8.6 W), then Apply.</p>
+              )}
               <div className="filters">
                 <label>
                   <input type="checkbox" checked={flags.vegOnly} onChange={(e) => setFlags((f) => ({ ...f, vegOnly: e.target.checked }))} />
@@ -289,7 +319,7 @@ export function App() {
             </form>
           </aside>
 
-          {analysis && sel && series && steps && (
+          {analysis && sel && series && steps && !empty && (
             <main className="main" data-stale={stale || undefined}>
               <section id="record" aria-labelledby="record-h">
                 <div className="section-head">
