@@ -1,0 +1,153 @@
+{
+ "epoch": "2000-01-01",
+ "coverageEndDay": 9496,
+ "coverageEnd": "2025-12-31",
+ "viirsOutages": [
+  {
+   "start": 8243,
+   "end": 8257,
+   "from": "2022-07-27",
+   "to": "2022-08-10",
+   "days": 15,
+   "modisDetections": 462
+  },
+  {
+   "start": 8916,
+   "end": 8920,
+   "from": "2024-05-30",
+   "to": "2024-06-03",
+   "days": 5,
+   "modisDetections": 10
+  },
+  {
+   "start": 8957,
+   "end": 8962,
+   "from": "2024-07-10",
+   "to": "2024-07-15",
+   "days": 6,
+   "modisDetections": 27
+  },
+  {
+   "start": 9073,
+   "end": 9075,
+   "from": "2024-11-03",
+   "to": "2024-11-05",
+   "days": 3,
+   "modisDetections": 45
+  }
+ ],
+ "countries": [
+  {
+   "slug": "portugal",
+   "name": "Portugal",
+   "iso": "PRT",
+   "n": 187686,
+   "counts": {
+    "modis": 77090,
+    "viirs-snpp": 110596
+   },
+   "bbox": [
+    -28.818,
+    30.139,
+    -6.218,
+    42.143
+   ],
+   "focus": [
+    -9.163,
+    37.194,
+    -6.926,
+    41.967
+   ],
+   "firstDay": 310,
+   "lastDay": 9496,
+   "epoch": "2000-01-01",
+   "bytes": 3378348,
+   "missingFiles": [],
+   "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Portugal.csv"
+  },
+  {
+   "slug": "greece",
+   "name": "Greece",
+   "iso": "GRC",
+   "n": 136792,
+   "counts": {
+    "modis": 46350,
+    "viirs-snpp": 90442
+   },
+   "bbox": [
+    19.657,
+    34.856,
+    28.233,
+    41.749
+   ],
+   "focus": [
+    20.761,
+    35.39,
+    26.563,
+    41.31
+   ],
+   "firstDay": 305,
+   "lastDay": 9496,
+   "epoch": "2000-01-01",
+   "bytes": 2462256,
+   "missingFiles": [],
+   "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Greece.csv"
+  },
+  {
+   "slug": "lebanon",
+   "name": "Lebanon",
+   "iso": "LBN",
+   "n": 12160,
+   "counts": {
+    "modis": 2234,
+    "viirs-snpp": 9926
+   },
+   "bbox": [
+    35.109,
+    33.057,
+    36.555,
+    34.684
+   ],
+   "focus": [
+    35.227,
+    33.104,
+    36.304,
+    34.615
+   ],
+   "firstDay": 317,
+   "lastDay": 9494,
+   "epoch": "2000-01-01",
+   "bytes": 218880,
+   "missingFiles": [],
+   "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Lebanon.csv"
+  },
+  {
+   "slug": "cyprus",
+   "name": "Cyprus",
+   "iso": "CYP",
+   "n": 6929,
+   "counts": {
+    "modis": 1372,
+    "viirs-snpp": 5557
+   },
+   "bbox": [
+    32.299,
+    34.632,
+    34.062,
+    35.181
+   ],
+   "focus": [
+    32.403,
+    34.693,
+    33.652,
+    35.121
+   ],
+   "firstDay": 315,
+   "lastDay": 9484,
+   "epoch": "2000-01-01",
+   "bytes": 124722,
+   "missingFiles": [],
+   "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Cyprus.csv"
+  }
+ ]
+}
