@@ -1,12 +1,14 @@
 // Calendar statistics on a daily series: monthly matrix, climatology, the
 // "is this normal?" verdict, season profile and peak season.
 
-import { FIRST_DAY, type Calendar } from './time.ts';
+import { dayIndex, FIRST_DAY, type Calendar } from './time.ts';
 
 export interface MonthMatrix {
   years: number[];
   /** [yearIndex][month 0-11]; NaN where the record has no coverage. */
   values: number[][];
+  /** The month the record ends in, when it ends before that month does. */
+  partial: { year: number; month: number; days: number } | null;
 }
 
 export function monthMatrix(series: Float32Array, cal: Calendar, firstDay = FIRST_DAY): MonthMatrix {
@@ -23,18 +25,30 @@ export function monthMatrix(series: Float32Array, cal: Calendar, firstDay = FIRS
     const m = cal.month[day];
     row[m] = (Number.isNaN(row[m]) ? 0 : row[m]) + series[day];
   }
-  return { years, values };
+  let partial: MonthMatrix['partial'] = null;
+  const last = cal.nDays - 1;
+  if (last >= firstDay) {
+    const year = cal.year[last];
+    const month = cal.month[last];
+    if (last < dayIndex(year, month + 2, 1) - 1) {
+      partial = { year, month, days: last - dayIndex(year, month + 1, 1) + 1 };
+    }
+  }
+  return { years, values, partial };
 }
 
-/** Years with all twelve months covered. */
+const isComplete = (mm: MonthMatrix, yi: number): boolean =>
+  mm.values[yi].every((v) => !Number.isNaN(v)) && mm.partial?.year !== mm.years[yi];
+
+/** Years with all twelve months fully covered. */
 export function completeYears(mm: MonthMatrix): number[] {
-  return mm.years.filter((_, yi) => mm.values[yi].every((v) => !Number.isNaN(v)));
+  return mm.years.filter((_, yi) => isComplete(mm, yi));
 }
 
 export function annualTotals(mm: MonthMatrix): { year: number; total: number; complete: boolean }[] {
   return mm.years.map((year, yi) => {
     const row = mm.values[yi];
-    const complete = row.every((v) => !Number.isNaN(v));
+    const complete = isComplete(mm, yi);
     return { year, total: row.reduce((a, v) => a + (Number.isNaN(v) ? 0 : v), 0), complete };
   });
 }
@@ -130,6 +144,66 @@ export function monthVerdict(mm: MonthMatrix, year: number, month: number): Verd
   const compare = years.includes(year) ? years : [...years, year];
   const others = compare.map((y) => mm.values[mm.years.indexOf(y)][month]);
   return judge(value, others, Math.min(...compare), Math.max(...compare));
+}
+
+/**
+ * Verdict for a run of days (inclusive day indices) against the same calendar
+ * dates in every baseline year. Used for the unfinished current month, for the
+ * last seven days and for a chosen date range.
+ */
+export function windowVerdict(
+  series: Float32Array, cal: Calendar, start: number, end: number, baseline: number[],
+): Verdict | null {
+  const length = end - start + 1;
+  if (length < 1 || length > 366 || start < FIRST_DAY || end >= cal.nDays) return null;
+  const sum = (from: number) => {
+    let total = 0;
+    for (let d = from; d < from + length; d++) total += series[d];
+    return total;
+  };
+  const value = sum(start);
+  const ownYear = cal.year[start];
+  // 29 February has no counterpart in most years; start those windows on the 28th.
+  const month = cal.month[start] + 1;
+  const first = dayIndex(ownYear, month, 1);
+  const dom = start - first + 1;
+  const years: number[] = [];
+  const others: number[] = [];
+  for (const y of baseline) {
+    if (y === ownYear) continue;
+    const monthLength = dayIndex(y, month + 1, 1) - dayIndex(y, month, 1);
+    const from = dayIndex(y, month, Math.min(dom, monthLength));
+    if (from < FIRST_DAY || from + length > cal.nDays) continue;
+    years.push(y);
+    others.push(sum(from));
+  }
+  if (years.length === 0) return null;
+  years.push(ownYear);
+  others.push(value);
+  return judge(value, others, Math.min(...years), Math.max(...years));
+}
+
+export interface Records {
+  /** Complete years, most active first. */
+  years: { year: number; total: number }[];
+  /** Fully covered months, most active first. */
+  months: { year: number; month: number; value: number }[];
+}
+
+export function records(mm: MonthMatrix, top = 5): Records {
+  const years = annualTotals(mm)
+    .filter((t) => t.complete)
+    .map(({ year, total }) => ({ year, total }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, top);
+  const months: Records['months'] = [];
+  mm.values.forEach((row, yi) => row.forEach((value, month) => {
+    const year = mm.years[yi];
+    if (Number.isNaN(value) || (mm.partial?.year === year && mm.partial.month === month)) return;
+    months.push({ year, month, value });
+  }));
+  months.sort((a, b) => b.value - a.value);
+  return { years, months: months.slice(0, top) };
 }
 
 /** Verdict for a whole year against every complete year. */

@@ -3,4 +3,5 @@ dist
 data/raw
 .env
 .env.*
+!.env.example
 .DS_Store

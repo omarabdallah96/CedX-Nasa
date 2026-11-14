@@ -33,13 +33,15 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
   const describe = (yi: number, m: number): string[] => {
     const year = mm.years[yi];
     const v = mm.values[yi][m];
-    const head = `${MONTHS_LONG[m]} ${year}: ${fmtCount(v)} ${unit}`;
+    const partial = mm.partial?.year === year && mm.partial.month === m ? mm.partial.days : 0;
+    const head = `${MONTHS_LONG[m]} ${year}${partial ? ` so far (${partial} days)` : ''}: ${fmtCount(v)} ${unit}`;
     if (mode === 'raw') {
       return [head, year < seamYear ? 'MODIS detections, 1 km pixels' : 'VIIRS detections, 375 m pixels'];
     }
     const lines = [head];
     const med = analysis.climate.median[m];
-    if (med > 0) lines.push(`${fmtRatio(v / med)} the usual ${MONTHS_LONG[m]} (median ${fmtCount(med)})`);
+    if (partial) lines.push(`Month still running; a full ${MONTHS_LONG[m]} usually reaches ${fmtCount(med)}`);
+    else if (med > 0) lines.push(`${fmtRatio(v / med)} the usual ${MONTHS_LONG[m]} (median ${fmtCount(med)})`);
     else lines.push(`The usual ${MONTHS_LONG[m]} sees none`);
     const lo = analysis.monthsLo.values[yi][m];
     const hi = analysis.monthsHi.values[yi][m];
@@ -104,6 +106,7 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
                           else cells.current.delete(`${yi}-${m}`);
                         }}
                         className="cal-cell"
+                        data-partial={mm.partial?.year === year && mm.partial.month === m ? '' : undefined}
                         style={{ background: ember(t), color: inkOn(t) }}
                         aria-pressed={selected}
                         aria-label={describe(yi, m).join('. ')}

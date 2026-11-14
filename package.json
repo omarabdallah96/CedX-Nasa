@@ -8,19 +8,23 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "api": "node --env-file-if-exists=.env server/main.ts",
     "data:fetch": "node pipeline/fetch-firms.mjs",
+    "data:recent": "node --env-file-if-exists=.env pipeline/fetch-recent.mjs",
     "data:pack": "node pipeline/pack.mjs && node pipeline/boundaries.mjs && node pipeline/summarize.ts",
-    "data": "npm run data:fetch && npm run data:pack"
+    "data": "npm run data:fetch && npm run data:recent && npm run data:pack"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.3.0",
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "@gsap/react": "^2.1.2",
+    "@hono/node-server": "^2.1.8",
     "d3-array": "^3.2.5",
     "d3-scale": "^4.0.3",
     "d3-shape": "^3.2.1",
     "gsap": "^3.15.1",
+    "hono": "^4.13.18",
     "maplibre-gl": "^6.18.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

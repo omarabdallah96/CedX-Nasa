@@ -12,13 +12,24 @@
 //      Terra+Aqua era  → ratio[month] × MODIS cell-days
 //      VIIRS era       → VIIRS cell-days as observed
 //      VIIRS outages   → ratio[month] × MODIS cell-days (gap fill)
+//      Suomi-NPP absent, NOAA-20 available → NOAA-20 cell-days ÷ ratioN20
 // 4. Validation. Leave-one-year-out over the overlap years.
+//
+// "VIIRS" on its own means the instrument on Suomi-NPP, the reference of the
+// record. NOAA-20 carries an identical instrument; its rows are kept in reserve
+// and only enter the record on days Suomi-NPP did not observe.
 
 import { AQUA_DAY, FIRST_DAY, OVERLAP_START, SEAM_DAY, type Calendar } from './time.ts';
 
 export const CELL_DEG = 0.01;
 /** Shrinkage strength, in MODIS cell-days of prior evidence. */
 export const KAPPA = 20;
+/**
+ * Shrinkage of the NOAA-20 / Suomi-NPP ratio toward 1, in Suomi-NPP cell-days.
+ * Much stronger than KAPPA: the two carry the same instrument and algorithm, so
+ * a ratio far from 1 in a small sample is one fire caught at a different hour.
+ */
+export const KAPPA_N20 = 200;
 const LON_CELLS = Math.round(360 / CELL_DEG);
 
 export interface Hotspots {
@@ -45,8 +56,9 @@ export interface Filters {
 
 export const isViirs = (flags: number): boolean => (flags & 1) === 1;
 export const isNight = (flags: number): boolean => (flags & 2) === 2;
-/** 0 Terra, 1 Aqua, 2 Suomi-NPP */
+/** 0 Terra, 1 Aqua, 2 Suomi-NPP, 3 NOAA-20 */
 export const satelliteOf = (flags: number): number => (flags >> 2) & 3;
+export const isN20 = (flags: number): boolean => (flags & 13) === 13;
 export const typeOf = (flags: number): number => (flags >> 4) & 3;
 
 export function unpackHotspots(buf: ArrayBuffer, n: number): Hotspots {
@@ -88,6 +100,9 @@ export interface Daily {
   cdM: Float32Array;
   cdT: Float32Array;
   cdV: Float32Array;
+  /** NOAA-20 VIIRS, raw and as cell-days (zero before NOAA-20 data is loaded). */
+  rawN: Float32Array;
+  cdN: Float32Array;
 }
 
 /** Rows of `h` must be sorted by day (the packed files are). */
@@ -99,10 +114,13 @@ export function dailyCounts(h: Hotspots, f: Filters, nDays: number): Daily {
     cdM: new Float32Array(nDays),
     cdT: new Float32Array(nDays),
     cdV: new Float32Array(nDays),
+    rawN: new Float32Array(nDays),
+    cdN: new Float32Array(nDays),
   };
   const seenM = new Set<number>();
   const seenT = new Set<number>();
   const seenV = new Set<number>();
+  const seenN = new Set<number>();
   let cur = -1;
   for (let i = 0; i < h.n; i++) {
     const d = h.day[i];
@@ -113,10 +131,17 @@ export function dailyCounts(h: Hotspots, f: Filters, nDays: number): Daily {
       seenM.clear();
       seenT.clear();
       seenV.clear();
+      seenN.clear();
     }
     const key = cellKey(h.lat[i], h.lon[i]);
     const fl = h.flags[i];
-    if (isViirs(fl)) {
+    if (isN20(fl)) {
+      out.rawN[d]++;
+      if (!seenN.has(key)) {
+        seenN.add(key);
+        out.cdN[d]++;
+      }
+    } else if (isViirs(fl)) {
       out.rawV[d]++;
       if (!seenV.has(key)) {
         seenV.add(key);
@@ -155,17 +180,30 @@ export interface OverlapTable {
   V: number[][];
   /** Whether that year-month has any day inside the overlap window. */
   has: boolean[][];
+  /** NOAA-20 and Suomi-NPP cell-days over the days both observed. */
+  nSum: number;
+  nvSum: number;
 }
 
-export function overlapTable(d: Daily, cal: Calendar, outage: Uint8Array): OverlapTable {
+/**
+ * `n20From` is the first day NOAA-20 rows are loaded for; leave it out when
+ * there are none.
+ */
+export function overlapTable(d: Daily, cal: Calendar, outage: Uint8Array, n20From = Infinity): OverlapTable {
   const years: number[] = [];
   const M: number[][] = [];
   const T: number[][] = [];
   const V: number[][] = [];
   const has: boolean[][] = [];
   const zero = () => new Array<number>(12).fill(0);
+  let nSum = 0;
+  let nvSum = 0;
   for (let day = OVERLAP_START; day < d.nDays; day++) {
     if (outage[day]) continue;
+    if (day >= n20From) {
+      nSum += d.cdN[day];
+      nvSum += d.cdV[day];
+    }
     const y = cal.year[day];
     if (years[years.length - 1] !== y) {
       years.push(y);
@@ -181,7 +219,7 @@ export function overlapTable(d: Daily, cal: Calendar, outage: Uint8Array): Overl
     V[yi][m] += d.cdV[day];
     has[yi][m] = true;
   }
-  return { years, M, T, V, has };
+  return { years, M, T, V, has, nSum, nvSum };
 }
 
 export interface Calibration {
@@ -191,6 +229,8 @@ export interface Calibration {
   ratioTerra: number[];
   annual: number;
   annualTerra: number;
+  /** NOAA-20 cell-days per Suomi-NPP cell-day, over the days both observed. */
+  ratioN20: number;
   /** Multiplicative 10th / 90th percentile spread of the yearly ratio around `ratio`. */
   spreadLo: number[];
   spreadHi: number[];
@@ -300,8 +340,12 @@ export function calibrate(t: OverlapTable, opts: CalibrateOptions = {}): Calibra
     spreadHi.push(Math.max(1, hi));
   }
 
+  // NOAA-20 against Suomi-NPP: one factor, shrunk toward the wider area or toward 1
+  // (same instrument, same algorithm, 50 minutes apart).
+  const ratioN20 = (t.nSum + KAPPA_N20 * (prior ? prior.ratioN20 : 1)) / (t.nvSum + KAPPA_N20);
+
   return {
-    ratio, ratioTerra, annual, annualTerra, spreadLo, spreadHi,
+    ratio, ratioTerra, annual, annualTerra, ratioN20, spreadLo, spreadHi,
     mSum, tSum, vSum, mTotal, vTotal, calibrated, usedPrior: !!prior,
   };
 }
@@ -312,6 +356,7 @@ export const SRC_TERRA = 1;
 export const SRC_MODIS = 2;
 export const SRC_VIIRS = 3;
 export const SRC_GAPFILL = 4;
+export const SRC_N20 = 5;
 
 export interface Harmonized {
   /** VIIRS-equivalent active-fire cell-days per day. */
@@ -321,7 +366,9 @@ export interface Harmonized {
   src: Uint8Array;
 }
 
-export function harmonizeDaily(d: Daily, c: Calibration, cal: Calendar, outage: Uint8Array): Harmonized {
+export function harmonizeDaily(
+  d: Daily, c: Calibration, cal: Calendar, outage: Uint8Array, n20From = Infinity,
+): Harmonized {
   const h = new Float32Array(d.nDays);
   const lo = new Float32Array(d.nDays);
   const hi = new Float32Array(d.nDays);
@@ -336,6 +383,10 @@ export function harmonizeDaily(d: Daily, c: Calibration, cal: Calendar, outage: 
     } else if (day < SEAM_DAY) {
       v = c.ratio[m] * d.cdM[day];
       src[day] = SRC_MODIS;
+    } else if (outage[day] && day >= n20From) {
+      v = d.cdN[day] / c.ratioN20;
+      src[day] = SRC_N20;
+      scaled = false;
     } else if (outage[day]) {
       v = c.ratio[m] * d.cdM[day];
       src[day] = SRC_GAPFILL;
@@ -353,12 +404,22 @@ export function harmonizeDaily(d: Daily, c: Calibration, cal: Calendar, outage: 
 
 /**
  * The record you get with no harmonization: raw MODIS detection counts until
- * VIIRS arrives, raw VIIRS counts afterwards.
+ * VIIRS arrives, raw VIIRS counts afterwards (NOAA-20's where it stands in).
  */
-export function naiveDaily(d: Daily): Float32Array {
+export function naiveDaily(d: Daily, src?: Uint8Array): Float32Array {
   const out = new Float32Array(d.nDays);
-  for (let day = FIRST_DAY; day < d.nDays; day++) out[day] = day < SEAM_DAY ? d.rawM[day] : d.rawV[day];
+  for (let day = FIRST_DAY; day < d.nDays; day++) {
+    out[day] = day < SEAM_DAY ? d.rawM[day] : src?.[day] === SRC_N20 ? d.rawN[day] : d.rawV[day];
+  }
   return out;
+}
+
+/**
+ * Whether a row is part of the published record on its day. NOAA-20 rows are a
+ * reserve: they count only on days the record takes its value from NOAA-20.
+ */
+export function inRecord(flags: number, day: number, src: Uint8Array): boolean {
+  return !isN20(flags) || src[day] === SRC_N20;
 }
 
 export interface ValidationPair {
@@ -457,10 +518,11 @@ export function validate(t: OverlapTable, priorTable?: OverlapTable, kappa = KAP
  * Per-detection harmonized weight, so that weights over any set of days sum to
  * the harmonized cell-days of those days. A detection gets 0 when it is filtered
  * out or when the harmonized record does not use its sensor on that day (MODIS
- * once VIIRS is observing, Aqua never before its launch, VIIRS never in an outage).
+ * once VIIRS is observing, Aqua never before its launch, VIIRS never in an outage,
+ * NOAA-20 only when Suomi-NPP is absent).
  */
 export function hotspotWeights(
-  h: Hotspots, f: Filters, c: Calibration, cal: Calendar, outage: Uint8Array,
+  h: Hotspots, f: Filters, c: Calibration, cal: Calendar, outage: Uint8Array, n20From = Infinity,
 ): Float32Array {
   const w = new Float32Array(h.n);
   const nDays = cal.nDays;
@@ -479,12 +541,15 @@ export function hotspotWeights(
       if (day < AQUA_DAY) {
         scale = c.ratioTerra[m];
         want = (fl) => !isViirs(fl) && satelliteOf(fl) === 0;
+      } else if (outage[day] && day >= n20From) {
+        scale = 1 / c.ratioN20;
+        want = isN20;
       } else if (day < SEAM_DAY || outage[day]) {
         scale = c.ratio[m];
         want = (fl) => !isViirs(fl);
       } else {
         scale = 1;
-        want = (fl) => isViirs(fl);
+        want = (fl) => isViirs(fl) && !isN20(fl);
       }
       counts.clear();
       for (let i = start; i < end; i++) {

@@ -26,6 +26,20 @@ export const SENSORS = [
 // Day 0 of every day index in the packed files.
 export const EPOCH_UTC = Date.UTC(2000, 0, 1);
 
+// Recent data comes from the FIRMS area API (needs FIRMS_MAP_KEY). Each sensor
+// has a science-quality source (SP) and a near-real-time one (NRT) that covers
+// the months SP has not reached yet.
+export const API_BASE = 'https://firms.modaps.eosdis.nasa.gov';
+export const API_DIR = path.join(RAW_DIR, 'api');
+export const API_FROM = '2026-01-01';
+export const API_SENSORS = [
+  { id: 'modis', sp: 'MODIS_SP', nrt: 'MODIS_NRT' },
+  { id: 'viirs-snpp', sp: 'VIIRS_SNPP_SP', nrt: 'VIIRS_SNPP_NRT' },
+  { id: 'viirs-noaa20', sp: 'VIIRS_NOAA20_SP', nrt: 'VIIRS_NOAA20_NRT' },
+];
+/** Tolerance, in degrees, for detections on a shoreline the border outline cuts off. */
+export const COAST_TOLERANCE = 0.02;
+
 export function rawPath(sensor, year, firmsName) {
   return path.join(RAW_DIR, sensor, String(year), `${sensor}_${year}_${firmsName}.csv`);
 }

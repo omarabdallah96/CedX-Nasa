@@ -1,18 +1,22 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { analyze, buildContext, type DatasetIndex } from './analysis.ts';
+import { analyze, buildContext, lastWeek, rangeSummary, selectionVerdict, type DatasetIndex } from './analysis.ts';
 import {
-  calibrate, dailyCounts, harmonizeDaily, hotspotWeights, outageMask, overlapTable, unpackHotspots, validate,
-  SRC_GAPFILL, SRC_MODIS, SRC_TERRA, SRC_VIIRS, type Filters, type Hotspots,
+  calibrate, dailyCounts, harmonizeDaily, hotspotWeights, inRecord, isN20, outageMask, overlapTable, unpackHotspots, validate,
+  SRC_GAPFILL, SRC_MODIS, SRC_N20, SRC_TERRA, SRC_VIIRS, type Filters, type Hotspots,
 } from './harmonize.ts';
-import { annualTotals, judge, monthVerdict, peakSeason, yearVerdict } from './stats.ts';
-import { AQUA_DAY, buildCalendar, dayIndex, isoDate, SEAM_DAY } from './time.ts';
+import {
+  annualTotals, completeYears, judge, monthMatrix, monthVerdict, peakSeason, records, windowVerdict, yearVerdict,
+} from './stats.ts';
+import {
+  AQUA_DAY, buildCalendar, dayIndex, FIRST_DAY, isoDate, parseIsoDate, rangeName, SEAM_DAY, spanName,
+} from './time.ts';
 import { parseBox, parseCoord } from './coords.ts';
 
 const ALL: Filters = { vegOnly: true, dropLowConf: true, bbox: null };
 
-interface Row { lat: number; lon: number; day: number; viirs?: boolean; aqua?: boolean; type?: number; conf?: number }
+interface Row { lat: number; lon: number; day: number; viirs?: boolean; n20?: boolean; aqua?: boolean; type?: number; conf?: number }
 
 function make(rows: Row[]): Hotspots {
   const sorted = [...rows].sort((a, b) => a.day - b.day);
@@ -26,9 +30,10 @@ function make(rows: Row[]): Hotspots {
     h.lat[i] = r.lat;
     h.lon[i] = r.lon;
     h.day[i] = r.day;
-    const sat = r.viirs ? 2 : r.aqua ? 1 : 0;
-    h.flags[i] = (r.viirs ? 1 : 0) | (sat << 2) | ((r.type ?? 0) << 4);
-    h.conf[i] = r.conf ?? (r.viirs ? 50 : 80);
+    const viirs = r.viirs || r.n20;
+    const sat = r.n20 ? 3 : r.viirs ? 2 : r.aqua ? 1 : 0;
+    h.flags[i] = (viirs ? 1 : 0) | (sat << 2) | ((r.type ?? 0) << 4);
+    h.conf[i] = r.conf ?? (viirs ? 50 : 80);
   });
   return h;
 }
@@ -156,6 +161,116 @@ describe('calibration on synthetic data', () => {
   });
 });
 
+describe('NOAA-20 takes over from Suomi-NPP', () => {
+  // 2026: Suomi-NPP sees 10 cells a day until it stops on 30 September; NOAA-20
+  // sees 12 cells a day all year (10 shared, 2 of its own); MODIS sees 4.
+  const nDays = dayIndex(2026, 12, 1);
+  const n20From = dayIndex(2026, 1, 1);
+  const snppEnd = dayIndex(2026, 9, 30);
+  const rows: Row[] = [];
+  for (let day = dayIndex(2012, 2, 1); day < nDays; day++) {
+    if (day < n20From && day % 7 !== 0) continue;
+    for (let k = 0; k < 4; k++) rows.push({ lat: 40 + k * 0.05, lon: -8, day });
+    if (day <= snppEnd) for (let k = 0; k < 10; k++) rows.push({ lat: 41 + k * 0.05, lon: -8, day, viirs: true });
+    if (day >= n20From) for (let k = 0; k < 12; k++) rows.push({ lat: 41 + k * 0.05, lon: -8, day, n20: true });
+  }
+  const h = make(rows);
+  const cal = buildCalendar(nDays);
+  const outage = outageMask([[snppEnd + 1, nDays - 1]], nDays);
+  const daily = dailyCounts(h, ALL, nDays);
+  const c = calibrate(overlapTable(daily, cal, outage, n20From));
+  const hz = harmonizeDaily(daily, c, cal, outage, n20From);
+
+  it('keeps NOAA-20 out of the Suomi-NPP counts and fits their ratio', () => {
+    const day = dayIndex(2026, 5, 1);
+    expect(daily.cdV[day]).toBe(10);
+    expect(daily.cdN[day]).toBe(12);
+    // 12 against 10 on 273 shared days, pulled slightly toward 1.
+    expect(c.ratioN20).toBeGreaterThan(1.18);
+    expect(c.ratioN20).toBeLessThan(1.2);
+    // The MODIS factor is untouched by the extra NOAA-20 rows.
+    expect(c.annual).toBeCloseTo(2.5, 6);
+  });
+
+  it('carries the record on NOAA-20 once Suomi-NPP stops, with no step', () => {
+    const before = dayIndex(2026, 9, 15);
+    const after = dayIndex(2026, 10, 15);
+    expect(hz.src[before]).toBe(SRC_VIIRS);
+    expect(hz.src[after]).toBe(SRC_N20);
+    expect(hz.h[before]).toBe(10);
+    expect(Math.abs(hz.h[after] - 10)).toBeLessThan(0.2);
+  });
+
+  it('lists NOAA-20 rows only on the days it carries, and weights still add up', () => {
+    const w = hotspotWeights(h, ALL, c, cal, outage, n20From);
+    let reserveWeight = 0;
+    let shown = 0;
+    for (let i = 0; i < h.n; i++) {
+      if (!isN20(h.flags[i])) continue;
+      if (inRecord(h.flags[i], h.day[i], hz.src)) shown++;
+      else reserveWeight += w[i];
+    }
+    expect(reserveWeight).toBe(0);
+    expect(shown).toBe(12 * (nDays - 1 - snppEnd));
+    const sumW = w.reduce((a, b) => a + b, 0);
+    const sumH = hz.h.reduce((a, b) => a + b, 0);
+    expect(Math.abs(sumW / sumH - 1)).toBeLessThan(1e-4);
+  });
+});
+
+describe('periods', () => {
+  // A record that ends on 13 November 2026, one unit a day, doubled in 2020.
+  const nDays = dayIndex(2026, 11, 14);
+  const cal = buildCalendar(nDays);
+  const series = new Float32Array(nDays);
+  for (let d = FIRST_DAY; d < nDays; d++) series[d] = cal.year[d] === 2020 ? 2 : 1;
+  const mm = monthMatrix(series, cal);
+
+  it('knows the month and the year that are still running', () => {
+    expect(mm.partial).toEqual({ year: 2026, month: 10, days: 13 });
+    const complete = completeYears(mm);
+    expect(complete[0]).toBe(2001);
+    expect(complete[complete.length - 1]).toBe(2025);
+    expect(annualTotals(mm).find((t) => t.year === 2026)!.complete).toBe(false);
+    // A record that ends on the last day of a month has no partial month.
+    expect(monthMatrix(series.subarray(0, dayIndex(2026, 11, 1)), buildCalendar(dayIndex(2026, 11, 1))).partial).toBeNull();
+  });
+
+  it('judges a run of days against the same dates in other years', () => {
+    const baseline = completeYears(mm);
+    const week = windowVerdict(series, cal, nDays - 7, nDays - 1, baseline)!;
+    expect(week.value).toBe(7);
+    expect(week.median).toBe(7);
+    expect(week.nYears).toBe(26);
+    expect(week.rank).toBe(2);
+    const in2020 = windowVerdict(series, cal, dayIndex(2020, 11, 7), dayIndex(2020, 11, 13), baseline)!;
+    expect(in2020.value).toBe(14);
+    expect(in2020.rank).toBe(1);
+    expect(in2020.level).toBe('record');
+    expect(in2020.nYears).toBe(25);
+    // A window starting on 29 February still finds a counterpart in every year.
+    expect(windowVerdict(series, cal, dayIndex(2024, 2, 29), dayIndex(2024, 3, 6), baseline)!.nYears).toBe(25);
+    expect(windowVerdict(series, cal, FIRST_DAY, nDays - 1, baseline)).toBeNull();
+  });
+
+  it('ranks the most active complete years and months', () => {
+    const r = records(mm, 3);
+    expect(r.years[0]).toEqual({ year: 2020, total: 732 });
+    expect(r.months[0].year).toBe(2020);
+    expect(r.months[0].value).toBe(62);
+    expect(r.months.some((m) => m.year === 2026 && m.month === 10)).toBe(false);
+  });
+
+  it('reads and names dates', () => {
+    expect(parseIsoDate('2026-11-13')).toBe(dayIndex(2026, 11, 13));
+    expect(parseIsoDate('2026-02-30')).toBeNaN();
+    expect(parseIsoDate('13/11/2026')).toBeNaN();
+    expect(spanName(dayIndex(2026, 11, 7), dayIndex(2026, 11, 13))).toBe('7–13 November');
+    expect(spanName(dayIndex(2026, 10, 28), dayIndex(2026, 11, 3))).toBe('28 October – 3 November');
+    expect(rangeName(dayIndex(2025, 12, 28), dayIndex(2026, 1, 3))).toBe('28 Dec 2025 – 3 Jan 2026');
+  });
+});
+
 describe('verdict', () => {
   it('ranks and labels', () => {
     const others = [1, 2, 3, 4, 5, 6, 7, 8, 9, 100];
@@ -241,11 +356,66 @@ describe.skipIf(!hasData)('real FIRMS data', () => {
     expect(Math.abs(Math.log(step(a.monthsH)))).toBeLessThan(Math.abs(Math.log(step(a.monthsNaive))));
 
     // Weights must reproduce the harmonized record exactly.
-    const w = hotspotWeights(h, ALL, a.calibration, ctx.cal, ctx.outage);
+    const w = hotspotWeights(h, ALL, a.calibration, ctx.cal, ctx.outage, ctx.n20From);
     const sumW = w.reduce((x, y) => x + y, 0);
     const sumH = a.harmonized.h.reduce((x, y) => x + y, 0);
     expect(Math.abs(sumW / sumH - 1)).toBeLessThan(1e-3);
   });
+
+  // Only when the pipeline has fetched data newer than the yearly archive.
+  it.skipIf(index.recentFromDay == null).each(index.countries.map((c) => c.slug))(
+    '%s: the recent record is continuous and NOAA-20 tracks Suomi-NPP',
+    (slug) => {
+      const h = load(slug);
+      const ctx = buildContext(h, { vegOnly: true, dropLowConf: true }, index);
+      const a = analyze(h, ALL, ctx);
+      const from = index.recentFromDay!;
+      const last = ctx.nDays - 1;
+
+      // Fit NOAA-20 ÷ Suomi-NPP on even months, test it on odd months.
+      const fit = [0, 0];
+      const byMonth = new Map<number, [number, number]>();
+      for (let d = from; d <= last; d++) {
+        if (ctx.outage[d]) continue;
+        const m = ctx.cal.month[d];
+        if (m % 2 === 0) {
+          fit[0] += a.daily.cdN[d];
+          fit[1] += a.daily.cdV[d];
+        } else {
+          const t = byMonth.get(m) ?? [0, 0];
+          t[0] += a.daily.cdN[d];
+          t[1] += a.daily.cdV[d];
+          byMonth.set(m, t);
+        }
+      }
+      const r = fit[0] / fit[1];
+      const errors = [...byMonth.values()].filter(([, v]) => v >= 10).map(([n, v]) => Math.abs(n / r - v) / v);
+      const week = lastWeek(a, ctx.cal);
+      console.log(
+        `${slug.padEnd(9)} NOAA-20 per Suomi-NPP cell-day ${a.calibration.ratioN20.toFixed(2)}` +
+        (errors.length > 0 ? ` | held-out monthly error ${pct(med(errors))} (n=${errors.length})` : ' | too few busy months to test') +
+        ` | last 7 days: ${week.harmonized.toFixed(1)} cell-days, rank ${week.verdict?.rank}/${week.verdict?.nYears}`,
+      );
+      expect(a.calibration.ratioN20).toBeGreaterThan(0.8);
+      expect(a.calibration.ratioN20).toBeLessThan(1.25);
+      if (errors.length >= 3) expect(med(errors)).toBeLessThan(0.2);
+
+      // The record reaches its last day, and every day since the seam has a source.
+      expect(isoDate(last)).toBe(index.coverageEnd);
+      for (let d = from; d <= last; d++) expect(a.harmonized.src[d]).toBeGreaterThanOrEqual(SRC_VIIRS);
+      if (index.snppEndDay != null) expect(a.harmonized.src[last]).toBe(SRC_N20);
+      expect(week.days).toBe(7);
+      expect(week.verdict).not.toBeNull();
+
+      // The running month is judged over its own days only.
+      const pv = selectionVerdict(a, ctx.cal, ctx.cal.year[last], ctx.cal.month[last])!;
+      if (a.monthsH.partial) {
+        expect(pv.partialDays).toBe(a.monthsH.partial.days);
+        const start = dayIndex(ctx.cal.year[last], ctx.cal.month[last] + 1, 1);
+        expect(pv.verdict.value).toBeCloseTo(rangeSummary(a, ctx.cal, start, last).harmonized, 3);
+      }
+    },
+  );
 
   it('Portugal: 2017 and October 2017 stand out, and the 2022 outage is filled', () => {
     const h = load('portugal');

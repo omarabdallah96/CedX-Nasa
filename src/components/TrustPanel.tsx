@@ -12,6 +12,12 @@ interface Props {
   place: string;
   isArea: boolean;
   outages: Outage[];
+  /** Last day of the record, written out. */
+  coverageEnd: string;
+  /** First day served by near-real-time data, written out; null when there is none. */
+  nrtFrom: string | null;
+  /** Last day Suomi-NPP delivered, written out; null while it is still observing. */
+  snppEnd: string | null;
 }
 
 function Scatter({ analysis }: { analysis: Analysis }) {
@@ -146,7 +152,7 @@ function RatioBars({ analysis }: { analysis: Analysis }) {
   );
 }
 
-export function TrustPanel({ analysis, place, isArea, outages }: Props) {
+export function TrustPanel({ analysis, place, isArea, outages, coverageEnd, nrtFrom, snppEnd }: Props) {
   const v = analysis.validation;
   const c = analysis.calibration;
   const years = analysis.table.years;
@@ -219,7 +225,20 @@ export function TrustPanel({ analysis, place, isArea, outages }: Props) {
               VIIRS was offline on {outages.length} occasion{outages.length === 1 ? '' : 's'} ({outages.map((o) => `${o.from} to ${o.to}`).join('; ')});
               those days are filled from MODIS and marked as such.
             </li>
-            <li>The archive ends on 31 December 2025. Live 2026 data needs a FIRMS API key and is not included yet.</li>
+            {nrtFrom ? (
+              <li>
+                The record runs through {coverageEnd}. From {nrtFrom} it uses NASA's near-real-time files, which are revised later and carry no
+                fire-type label: a spot that held a factory or flare in earlier years is treated as one, everything else as vegetation fire.
+              </li>
+            ) : (
+              <li>The record ends on {coverageEnd}.</li>
+            )}
+            {snppEnd && (
+              <li>
+                Suomi-NPP stopped delivering after {snppEnd}. From then on the same VIIRS instrument on NOAA-20 carries the record, divided by{' '}
+                {c.ratioN20.toFixed(2)}: the ratio between the two over the days both observed.
+              </li>
+            )}
           </ul>
         </div>
       </div>

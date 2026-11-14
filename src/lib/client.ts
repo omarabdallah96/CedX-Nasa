@@ -9,7 +9,8 @@ export class AnalysisClient {
   private worker = new Worker(new URL('../worker/analysis.worker.ts', import.meta.url), { type: 'module' });
   private pending = new Map<number, Pending>();
   private nextId = 1;
-  readonly baseUrl = new URL('data/', document.baseURI).href;
+  /** Where the data files are read from: the bundled copy, or the backend once it has answered. */
+  baseUrl = new URL('data/', document.baseURI).href;
 
   constructor() {
     this.worker.onmessage = (ev: MessageEvent<{ id: number; ok: boolean; result?: unknown; error?: string }>) => {
@@ -42,4 +43,28 @@ export class AnalysisClient {
   csv(slug: string, filters: Filters, from: number, to: number): Promise<CsvResult> {
     return this.call('csv', { slug, filters, from, to } satisfies Body<'csv'>);
   }
+}
+
+export interface DataSource {
+  url: string;
+  /** True when the files come from the backend, which keeps them current. */
+  live: boolean;
+}
+
+/**
+ * Prefers the backend's copy of the data (kept fresh from FIRMS) and falls back
+ * to the copy bundled with the site, so the site works with no server at all.
+ */
+export async function pickDataSource(): Promise<DataSource> {
+  const bundled = new URL('data/', document.baseURI).href;
+  const api = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
+  try {
+    const res = await fetch(`${api}/api/v1/health`, { signal: AbortSignal.timeout(2500) });
+    if (res.ok && ((await res.json()) as { ok?: boolean }).ok === true) {
+      return { url: new URL(`${api}/api/v1/data/`, document.baseURI).href, live: true };
+    }
+  } catch {
+    // No backend here: a static host, or the server is down.
+  }
+  return { url: bundled, live: false };
 }

@@ -1,49 +1,89 @@
 # Ember Almanac
 
-**Is this fire season normal?** Ember Almanac stitches 25 years of NASA fire detections (MODIS since 2000, VIIRS since 2012) into one consistent record, and answers that question for a country or any box you draw inside it.
+**Is this fire season normal?** Ember Almanac stitches NASA fire detections from November 2000 to yesterday (MODIS since 2000, VIIRS since 2012) into one consistent record, and answers that question for a country or any box you draw inside it.
 
 Built for the NASA Space Apps Challenge 2026, challenge "Harmonization of MODIS and VIIRS Hot Spots".
 
 ## What it does
 
-- **Answer first.** Pick a place and a month; get one sentence: how it compares with the usual month and where it ranks.
+- **Answer first.** Pick a place and a month; get one sentence: how it compares with the usual month and where it ranks. The month still running is judged over the days it has so far.
+- **The last 7 days.** The newest week against the same dates in every other year.
+- **Any date range.** From–to dates drive the map, a summary against the same dates in other years, and the downloads.
 - **Fire Rings.** One ring per year, 2000 at the core, one step per day. Read a place's fire history like tree rings.
-- **Burning calendar.** The same record as a year × month table with year totals.
+- **Burning calendar.** The same record as a year × month table with year totals, and the most active years and months ranked.
 - **The seam.** Switch between the raw record (it jumps in 2012 when VIIRS arrives) and the harmonized one.
 - **Season profile.** The selected year against the median and the usual range, with the critical period named.
 - **Evidence.** Held-out validation, conversion factors by month, and what the record cannot tell you.
-- **Exports.** CSV of every hotspot in the search, with its weight in the harmonized record; a PNG card of the rings.
+- **Exports.** CSV of every hotspot in the period, with its weight in the harmonized record; the daily series and the whole calendar table as CSV; the calendar and the rings as PNG cards.
+- **API.** The same answers as JSON, for a phone app or anything else.
 
 ## Run it
 
-Needs Node 24 or newer (the pipeline runs TypeScript directly).
+Needs Node 24 or newer (the pipeline and the server run TypeScript directly).
 
 ```bash
 npm install
-npm run data     # downloads FIRMS archive files (~26 MB) and builds public/data/
-npm run dev      # http://localhost:5173
-npm test         # harmonization tests, including checks on the real data
-npm run build    # static site in dist/
+cp .env.example .env   # optional: paste a free FIRMS MAP_KEY to get data newer than 2025
+npm run data           # FIRMS archive (~26 MB), the current year from the FIRMS API, then public/data/
+npm run api            # API on http://localhost:8787/api/v1 (also serves dist/ when built)
+npm run dev            # website on http://localhost:5173
+npm test               # harmonization and API tests, including checks on the real data
+npm run build          # static site in dist/
 ```
 
-The site is fully static: `dist/` can be hosted anywhere.
+Two ways to host it:
+
+- **Static only.** `dist/` works on any static host. It carries its own copy of the data, current as of the build.
+- **With the backend.** `npm run api` (or the `Dockerfile`) serves the site and the API together. With `FIRMS_MAP_KEY` set, the server pulls the newest days from NASA every six hours. The website asks `/api/v1/health` at start and uses the backend's data when it answers; otherwise it uses its bundled copy. Set `VITE_API_URL` at build time when the API lives on another origin.
+
+The key is read from the environment on the server only. It is never sent to the browser, and `.env` is git-ignored.
+
+## API
+
+Read-only JSON under `/api/v1`, open CORS, no key needed. Every answer is computed by the same code the website runs (`src/lib`), so the two cannot disagree.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/v1` | Self-description and endpoint list |
+| `GET /health` | Coverage end and when the data was built |
+| `GET /countries` | Places, boxes, conversion factor, held-out error |
+| `GET /countries/{slug}/now` | Last 7 days and the month so far, each with a verdict and a sentence |
+| `GET /countries/{slug}/verdict?year=&month=` | Value, median, ratio, rank, level, sentence |
+| `GET /countries/{slug}/calendar?mode=harmonized\|raw` | Year × month table, likely range, usual values |
+| `GET /countries/{slug}/season?year=` | Five-day profile against the median and usual range; peak season |
+| `GET /countries/{slug}/range?from=&to=` | Totals, daily values, comparison with the same dates in other years |
+| `GET /countries/{slug}/records?top=` | Most active years and months |
+| `GET /countries/{slug}/hotspots?from=&to=&limit=&format=json\|csv` | Detections with their harmonized weight |
+| `GET /countries/{slug}/method` | Conversion factors, validation, limits |
+| `GET /data/{file}` | The packed data files the website loads |
+
+Common query: `bbox=west,south,east,north` (a box inside the country), `vegOnly=true|false`, `dropLowConf=true|false`. Dates are `YYYY-MM-DD`, months are 1–12. Errors are `{ "error": { "code", "message" } }` with status 400 or 404.
+
+```bash
+curl "http://localhost:8787/api/v1/countries/portugal/now"
+curl "http://localhost:8787/api/v1/countries/greece/verdict?year=2021&month=8"
+curl "http://localhost:8787/api/v1/countries/portugal/range?from=2017-10-10&to=2017-10-20&bbox=-8.6,39.6,-7.4,40.6"
+```
+
+There are no accounts, no database and no rate limiting; put it behind a proxy that limits requests before exposing it widely.
 
 ## How the two records are stitched
 
 1. **One unit.** Each detection is snapped to a 0.01° grid (about 1 km). A cell counts once per day per sensor: an *active-fire cell-day*. This removes most of the inflation from VIIRS's 375 m pixels.
-2. **Calibrate where both flew.** For February 2012 to December 2025, per calendar month: total VIIRS cell-days ÷ total MODIS cell-days. A drawn area is shrunk toward the country's ratio when its own sample is small.
+2. **Calibrate where both flew.** Over every month since February 2012 in which both observed, per calendar month: total VIIRS cell-days ÷ total MODIS cell-days. A drawn area is shrunk toward the country's ratio when its own sample is small.
 3. **Convert the past.** Before 2012, MODIS cell-days × that month's factor. Before July 2002 only Terra flew, so Terra has its own factor.
 4. **Fill outages.** Days when VIIRS was offline are filled from MODIS and marked.
-5. **Validate.** Leave one overlap year out, predict it from MODIS alone, compare with VIIRS.
+5. **Hand over to NOAA-20.** Suomi-NPP stopped delivering after 2 November 2026. From then on, and in Suomi-NPP's 2026 outages, the identical VIIRS instrument on NOAA-20 carries the record, divided by the NOAA-20 ÷ Suomi-NPP ratio over the days both observed (Portugal 1.01, Greece 1.03, Lebanon 0.94, Cyprus 1.14), shrunk firmly toward 1.
+6. **Validate.** Leave one overlap year out, predict it from MODIS alone, compare with VIIRS.
 
 Results on held-out years (median absolute error, raw MODIS → harmonized):
 
 | Country  | VIIRS per MODIS cell-day | Monthly error | Yearly error | Bias        |
 |----------|--------------------------|---------------|--------------|-------------|
-| Portugal | ×1.47                    | 49% → 18%     | 34% → 5%     | −32% → +2%  |
-| Greece   | ×2.40                    | 68% → 20%     | 61% → 6%     | −58% → +1%  |
-| Lebanon  | ×5.51                    | 90% → 45%     | 84% → 18%    | −82% → −8%  |
-| Cyprus   | ×3.21                    | 67% → 45%     | 71% → 27%    | −69% → −8%  |
+| Portugal | ×1.47                    | 48% → 19%     | 34% → 6%     | −32% → +2%  |
+| Greece   | ×2.41                    | 68% → 19%     | 61% → 6%     | −58% → +1%  |
+| Lebanon  | ×5.50                    | 90% → 44%     | 84% → 17%    | −82% → −7%  |
+| Cyprus   | ×3.28                    | 67% → 49%     | 71% → 26%    | −70% → −8%  |
 
 The factor differs fourfold between these four countries, which is why it is fitted per place and never global.
 
@@ -51,27 +91,30 @@ The factor differs fourfold between these four countries, which is why it is fit
 
 - Counts detections, not hectares. Cloud and smoke hide fires from both sensors.
 - A month in which MODIS saw nothing converts to zero, so quiet seasons before 2012 are understated where fires are small (visible in Lebanon and Cyprus).
-- The archive ends on 31 December 2025. Live 2026 data needs a FIRMS MAP_KEY and is not wired in yet.
+- Data after 2025 comes from the FIRMS area API and needs a MAP_KEY; without one the record ends on 31 December 2025. API rows are clipped to the Natural Earth border (99.8–100% agreement with NASA's own country files on 2025 test windows).
+- The newest months (MODIS from September 2026, VIIRS from August 2026) are near-real-time files: NASA revises them later, and they carry no fire-type label. A cell that held a factory or flare in earlier years is treated as one; tested on 2025 this catches 93–99% of such detections in Portugal, Greece and Cyprus and wrongly flags 0–3% of fires. Lebanon had too few to test.
+- NOAA-20 is compared with Suomi-NPP over 2026 only. Where fires are few (Cyprus) that ratio is mostly the prior.
 - Four countries are packaged. Adding one is a line in `pipeline/config.mjs`; very large countries would need pre-aggregated tiles.
 
 ## Layout
 
 ```
-pipeline/   fetch-firms.mjs · pack.mjs · boundaries.mjs · summarize.ts
-src/lib/    harmonize.ts · stats.ts · analysis.ts · rings.ts · coords.ts · time.ts   (+ harmonize.test.ts)
-src/worker/ analysis.worker.ts   runs the analysis off the main thread
-src/components/  MapPanel · Verdict · FireRings · BurnCalendar · SeasonChart · TrustPanel · ExportMenu · Intro
+pipeline/   fetch-firms.mjs · fetch-recent.mjs · clip.mjs · pack.mjs · boundaries.mjs · summarize.ts
+src/lib/    harmonize.ts · stats.ts · analysis.ts · service.ts · sentence.ts · rings.ts · coords.ts · time.ts   (+ harmonize.test.ts)
+src/worker/ analysis.worker.ts   runs lib/service.ts off the main thread
+server/     app.ts (routes) · main.ts · refresh.ts   runs the same lib/service.ts   (+ api.test.ts)
+src/components/  MapPanel · Verdict · NowCard · PeriodPanel · FireRings · BurnCalendar · Records · SeasonChart · TrustPanel · ExportMenu · Intro
 ```
 
 ## Data and credits
 
-- Hotspots: [NASA FIRMS](https://www.earthdata.nasa.gov/data/tools/firms) yearly country archive, MODIS (Terra, Aqua) and VIIRS (Suomi NPP).
+- Hotspots: [NASA FIRMS](https://www.earthdata.nasa.gov/data/tools/firms) yearly country archive and area API, MODIS (Terra, Aqua) and VIIRS (Suomi NPP, NOAA-20).
 - Imagery: NASA GIBS, Blue Marble Shaded Relief and Bathymetry.
 - Borders: Natural Earth (public domain).
-- Libraries: React, Vite, MapLibre GL JS, GSAP (ScrollTrigger), d3-scale, d3-shape; fonts Fraunces and IBM Plex.
+- Libraries: React, Vite, MapLibre GL JS, GSAP (ScrollTrigger), d3-scale, d3-shape, Hono; fonts Fraunces and IBM Plex.
 
 An independent project, not a NASA product.
 
 ## Use of AI tools
 
-This project was built with Claude Code (Anthropic). The assistant wrote the data pipeline, the harmonization and statistics code, the tests, the interface and this README, and ran the data exploration that chose the method. The team chose the challenge, the concept direction, the showcase region and the features, and reviewed the result.
+This project was built with Claude Code (Anthropic). The assistant wrote the data pipeline, the harmonization and statistics code, the API server, the tests, the interface and this README, and ran the data exploration that chose the method. The team chose the challenge, the concept direction, the showcase region and the features, and reviewed the result.

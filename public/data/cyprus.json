@@ -2,27 +2,28 @@
  "slug": "cyprus",
  "name": "Cyprus",
  "iso": "CYP",
- "n": 6929,
+ "n": 7306,
  "counts": {
-  "modis": 1372,
-  "viirs-snpp": 5557
+  "modis": 1379,
+  "viirs-snpp": 5705,
+  "viirs-noaa20": 222
  },
  "bbox": [
   32.299,
   34.632,
   34.062,
-  35.181
+  35.183
  ],
  "focus": [
-  32.403,
-  34.693,
-  33.652,
-  35.121
+  32.406,
+  34.692,
+  33.649,
+  35.123
  ],
  "firstDay": 315,
- "lastDay": 9484,
+ "lastDay": 9812,
  "epoch": "2000-01-01",
- "bytes": 124722,
+ "bytes": 131508,
  "missingFiles": [],
  "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Cyprus.csv"
 }

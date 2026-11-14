@@ -58,3 +58,36 @@ export const AQUA_DAY = dayIndex(2002, 7, 4);
 export const SEAM_DAY = dayIndex(2012, 1, 20);
 /** Calibration uses whole months only, so the overlap starts in February 2012. */
 export const OVERLAP_START = dayIndex(2012, 2, 1);
+
+/** "7–13 November", "28 October – 3 November": a run of days without its year. */
+export function spanName(from: number, to: number, names: string[] = MONTHS_LONG): string {
+  const a = new Date(EPOCH_MS + from * DAY_MS);
+  const b = new Date(EPOCH_MS + to * DAY_MS);
+  const sameMonth = a.getUTCMonth() === b.getUTCMonth() && a.getUTCFullYear() === b.getUTCFullYear();
+  if (from === to) return `${a.getUTCDate()} ${names[a.getUTCMonth()]}`;
+  return sameMonth
+    ? `${a.getUTCDate()}–${b.getUTCDate()} ${names[b.getUTCMonth()]}`
+    : `${a.getUTCDate()} ${names[a.getUTCMonth()]} – ${b.getUTCDate()} ${names[b.getUTCMonth()]}`;
+}
+
+/** "13 November 2026" */
+export function longDate(day: number, names: string[] = MONTHS_LONG): string {
+  const d = new Date(EPOCH_MS + day * DAY_MS);
+  return `${d.getUTCDate()} ${names[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** Day index of an ISO date (YYYY-MM-DD), or NaN when it is not a real date. */
+export function parseIsoDate(text: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
+  if (!m) return NaN;
+  const day = dayIndex(Number(m[1]), Number(m[2]), Number(m[3]));
+  return isoDate(day) === text.trim() ? day : NaN;
+}
+
+/** "1–31 Aug 2025", "28 Dec 2024 – 3 Jan 2025": a run of days with its year. */
+export function rangeName(from: number, to: number, names: string[] = MONTHS): string {
+  const a = new Date(EPOCH_MS + from * DAY_MS);
+  const b = new Date(EPOCH_MS + to * DAY_MS);
+  if (a.getUTCFullYear() === b.getUTCFullYear()) return `${spanName(from, to, names)} ${b.getUTCFullYear()}`;
+  return `${longDate(from, names)} – ${longDate(to, names)}`;
+}

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DatasetIndex } from './lib/analysis.ts';
-import { AnalysisClient } from './lib/client.ts';
+import { lastWeek, rangeSummary, selectionVerdict, type DatasetIndex } from './lib/analysis.ts';
+import { AnalysisClient, pickDataSource, type DataSource } from './lib/client.ts';
 import { EDGES, parseBox } from './lib/coords.ts';
 import { fmtCount } from './lib/format.ts';
-import { SRC_GAPFILL, SRC_MODIS, SRC_TERRA, type BBox, type Filters } from './lib/harmonize.ts';
-import { completeYears, monthVerdict, seamStep } from './lib/stats.ts';
-import { buildCalendar, dayIndex, FIRST_DAY, isoDate, MONTHS, MONTHS_LONG, SEAM_DAY } from './lib/time.ts';
+import { SRC_GAPFILL, SRC_MODIS, SRC_N20, SRC_TERRA, type BBox, type Filters } from './lib/harmonize.ts';
+import { ANSWER, monthWording, verdictSentence } from './lib/sentence.ts';
+import { completeYears, seamStep } from './lib/stats.ts';
+import { buildCalendar, FIRST_DAY, isoDate, longDate, MONTHS, rangeName, SEAM_DAY } from './lib/time.ts';
 import type { CountrySummary, GlobeView, IntroStory, SeamMode } from './lib/types.ts';
 import type { AnalyzeResult, PointsResult } from './worker/analysis.worker.ts';
 import { BurnCalendar } from './components/BurnCalendar.tsx';
@@ -13,9 +14,12 @@ import { ExportMenu } from './components/ExportMenu.tsx';
 import { FireRings, type FireRingsHandle, type Selection } from './components/FireRings.tsx';
 import { Intro } from './components/Intro.tsx';
 import { MapPanel } from './components/MapPanel.tsx';
+import { NowCard } from './components/NowCard.tsx';
+import { monthPeriod, PeriodPanel, type Period } from './components/PeriodPanel.tsx';
+import { Records } from './components/Records.tsx';
 import { SeasonChart } from './components/SeasonChart.tsx';
 import { TrustPanel } from './components/TrustPanel.tsx';
-import { ANSWER, shortcuts, Verdict, verdictSentence } from './components/Verdict.tsx';
+import { shortcuts, Verdict } from './components/Verdict.tsx';
 
 const SEAM_YEAR = 2012;
 
@@ -33,6 +37,7 @@ function robustMax(values: Float32Array, q: number): number {
 
 export function App() {
   const client = useMemo(() => new AnalysisClient(), []);
+  const [source, setSource] = useState<DataSource | null>(null);
   const [index, setIndex] = useState<DatasetIndex | null>(null);
   const [summary, setSummary] = useState<CountrySummary[] | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -50,12 +55,28 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [picked, setPicked] = useState<Selection | null>(null);
+  // Null while the period on the map simply follows the selected month.
+  const [range, setRange] = useState<Period | null>(null);
   const [mode, setMode] = useState<SeamMode>('harmonized');
   const [points, setPoints] = useState<PointsResult | null>(null);
   const rings = useRef<FireRingsHandle>(null);
 
+  // The backend's data when it answers, the bundled copy otherwise.
+  useEffect(() => {
+    let alive = true;
+    void pickDataSource().then((s) => {
+      if (!alive) return;
+      client.baseUrl = s.url;
+      setSource(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [client]);
+
   // Static files the whole app needs.
   useEffect(() => {
+    if (!source) return;
     let alive = true;
     const get = async <T,>(name: string): Promise<T> => {
       const res = await fetch(`${client.baseUrl}${name}`);
@@ -75,7 +96,7 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [client]);
+  }, [client, source]);
 
   useEffect(() => {
     const target = phase === 'tool' ? `#/${slug}` : '';
@@ -114,13 +135,21 @@ export function App() {
     return analysis && cal ? shortcuts(analysis, cal).latestPeak : null;
   }, [picked, analysis, cal]);
 
-  // Detections of the selected month, for the map.
+  // Picking a month puts the period back on that month.
+  const select = useCallback((s: Selection) => {
+    setPicked(s);
+    setRange(null);
+  }, []);
+  const period: Period | null = useMemo(
+    () => range ?? (sel && index ? monthPeriod(sel, index.coverageEndDay) : null),
+    [range, sel, index],
+  );
+
+  // Detections of the period, for the map.
   useEffect(() => {
-    if (phase !== 'tool' || !sel || !index) return;
+    if (phase !== 'tool' || !period || !index) return;
     let alive = true;
-    const from = dayIndex(sel.year, sel.month + 1, 1);
-    const to = Math.min(index.coverageEndDay, dayIndex(sel.year, sel.month + 2, 1) - 1);
-    client.points(slug, filters, from, to).then(
+    client.points(slug, filters, period.from, period.to).then(
       (p) => alive && setPoints(p),
       () => alive && setPoints(null),
     );
@@ -128,12 +157,13 @@ export function App() {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, index, phase, key, sel?.year, sel?.month]);
+  }, [client, index, phase, key, period?.from, period?.to]);
 
   const open = useCallback((s: string) => {
     setSlug(s);
     setBBox(null);
     setPicked(null);
+    setRange(null);
     setDrawing(false);
     setPhase('tool');
   }, []);
@@ -177,7 +207,9 @@ export function App() {
         return `${date}: ${fmtCount(analysis.naive[day])} raw ${day < SEAM_DAY ? 'MODIS' : 'VIIRS'} detections`;
       }
       const src = analysis.harmonized.src[day];
-      const how = src === SRC_TERRA || src === SRC_MODIS ? 'scaled from MODIS' : src === SRC_GAPFILL ? 'VIIRS outage, filled from MODIS' : 'VIIRS observed';
+      const how = src === SRC_TERRA || src === SRC_MODIS
+        ? 'scaled from MODIS'
+        : src === SRC_GAPFILL ? 'VIIRS outage, filled from MODIS' : src === SRC_N20 ? 'VIIRS on NOAA-20' : 'VIIRS observed';
       return `${date}: ${fmtCount(analysis.harmonized.h[day])} cell-days · ${how}`;
     },
     [analysis, cal, mode],
@@ -193,8 +225,12 @@ export function App() {
   }
 
   const empty = analysis !== null && analysis.detections.modis + analysis.detections.viirs === 0;
-  const verdict = analysis && sel ? monthVerdict(analysis.monthsH, sel.year, sel.month) : null;
+  const pv = analysis && sel && cal ? selectionVerdict(analysis, cal, sel.year, sel.month) : null;
+  const wording = pv && sel ? monthWording(pv, sel.year, sel.month) : null;
   const baseline = analysis ? completeYears(analysis.monthsH) : [];
+  const summaryOfPeriod = analysis && cal && period ? rangeSummary(analysis, cal, period.from, period.to) : null;
+  const week = analysis && cal ? lastWeek(analysis, cal) : null;
+  const weekShown = !!(period && week && period.from === week.from && period.to === week.to);
 
   return (
     <div className="app" data-phase={phase}>
@@ -210,7 +246,7 @@ export function App() {
           onPick={open}
           density={phase === 'tool' && !stale ? result?.data.density ?? null : null}
           points={phase === 'tool' ? points : null}
-          dataUrl={client.baseUrl}
+          dataUrl={source?.url ?? client.baseUrl}
         />
       )}
 
@@ -248,12 +284,23 @@ export function App() {
                 </p>
               </div>
             ) : analysis && sel ? (
-              <Verdict analysis={analysis} cal={cal} sel={sel} onSelect={setPicked} place={place} coverageEnd={`${Number(isoDate(index.coverageEndDay).slice(8))} ${MONTHS_LONG[cal.month[index.coverageEndDay]]} ${cal.year[index.coverageEndDay]}`} />
+              <Verdict analysis={analysis} cal={cal} sel={sel} onSelect={select} place={place} />
             ) : (
               <div className="verdict">
                 <p className="eyebrow">{country?.name}</p>
                 <p className="verdict-text">Reading {country ? country.n.toLocaleString('en-US') : ''} satellite detections…</p>
               </div>
+            )}
+
+            {analysis && week && !empty && !error && (
+              <NowCard
+                analysis={analysis}
+                cal={cal}
+                week={week}
+                live={source?.live ?? false}
+                shown={weekShown}
+                onShow={() => setRange(weekShown ? null : { from: week.from, to: week.to })}
+              />
             )}
 
             <form className="area" onSubmit={submitBox} aria-labelledby="area-h">
@@ -305,12 +352,22 @@ export function App() {
                   Drop low-confidence detections
                 </label>
               </div>
+              {sel && period && summaryOfPeriod && (
+                <PeriodPanel
+                  period={period}
+                  custom={range}
+                  sel={sel}
+                  lastDay={index.coverageEndDay}
+                  summary={summaryOfPeriod}
+                  onChange={setRange}
+                />
+              )}
               <p className="map-key">
                 <span><i className="pt pt-viirs" /> VIIRS</span>
                 <span><i className="pt pt-modis" /> MODIS</span>
                 <span>
-                  {sel && points
-                    ? `${points.total.toLocaleString('en-US')} detections in ${MONTHS_LONG[sel.month]} ${sel.year}` +
+                  {period && points
+                    ? `${points.total.toLocaleString('en-US')} detections on the map, ${rangeName(period.from, period.to)}` +
                       (points.total > points.lon.length ? ` (${points.lon.length.toLocaleString('en-US')} drawn)` : '')
                     : ''}
                 </span>
@@ -363,13 +420,14 @@ export function App() {
                     cal={cal}
                     max={ringMax}
                     sel={sel}
-                    onSelect={setPicked}
+                    onSelect={select}
                     title={bbox ? 'Selected area' : country?.name ?? ''}
                     describe={describeDay}
                     seamYear={SEAM_YEAR}
                   />
-                  <BurnCalendar analysis={analysis} mode={mode} sel={sel} onSelect={setPicked} seamYear={SEAM_YEAR} />
+                  <BurnCalendar analysis={analysis} mode={mode} sel={sel} onSelect={select} seamYear={SEAM_YEAR} />
                 </div>
+                <Records analysis={analysis} sel={sel} onSelect={select} />
               </section>
 
               <section id="season" aria-labelledby="season-h">
@@ -381,30 +439,43 @@ export function App() {
               <section id="trust" aria-labelledby="trust-h">
                 <p className="eyebrow">The evidence</p>
                 <h2 id="trust-h">Can you trust the stitch?</h2>
-                <TrustPanel analysis={analysis} place={place} isArea={!!bbox} outages={index.viirsOutages} />
+                <TrustPanel
+                  analysis={analysis}
+                  place={place}
+                  isArea={!!bbox}
+                  outages={index.viirsOutages}
+                  coverageEnd={longDate(index.coverageEndDay)}
+                  nrtFrom={index.nrtFromDay && Object.keys(index.nrtFromDay).length > 0 ? longDate(Math.min(...Object.values(index.nrtFromDay))) : null}
+                  snppEnd={index.snppEndDay != null ? longDate(index.snppEndDay) : null}
+                />
               </section>
 
               <section id="export" aria-labelledby="export-h">
                 <p className="eyebrow">Take it with you</p>
                 <h2 id="export-h">Download the search</h2>
-                <ExportMenu
-                  client={client}
-                  slug={slug}
-                  filters={filters}
-                  sel={sel}
-                  lastDay={index.coverageEndDay}
-                  ringsCanvas={() => rings.current?.canvas() ?? null}
-                  place={country ? (bbox ? `${country.name}, selected area` : country.name) : ''}
-                  headline={verdict ? ANSWER[verdict.level] : ''}
-                  detail={verdict ? verdictSentence(verdict, `${MONTHS_LONG[sel.month]} ${sel.year}`, MONTHS_LONG[sel.month], place) : ''}
-                />
+                {period && (
+                  <ExportMenu
+                    client={client}
+                    slug={slug}
+                    filters={filters}
+                    analysis={analysis}
+                    cal={cal}
+                    sel={sel}
+                    period={period}
+                    ringsCanvas={() => rings.current?.canvas() ?? null}
+                    place={country ? (bbox ? `${country.name}, selected area` : country.name) : ''}
+                    headline={pv ? ANSWER[pv.verdict.level] : ''}
+                    detail={pv && wording ? verdictSentence(pv.verdict, wording.what, wording.usual, place) : ''}
+                  />
+                )}
               </section>
             </main>
           )}
 
           <footer className="foot">
             <p>
-              Hotspots: NASA FIRMS archive, MODIS (Terra and Aqua) and VIIRS (Suomi NPP), {analysis ? `${(analysis.detections.modis + analysis.detections.viirs).toLocaleString('en-US')} detections in this view` : ''}.
+              Hotspots: NASA FIRMS, MODIS (Terra and Aqua) and VIIRS (Suomi NPP, NOAA-20){analysis ? `, ${(analysis.detections.modis + analysis.detections.viirs).toLocaleString('en-US')} detections in this view` : ''}.
+              Data through {longDate(index.coverageEndDay)}{source?.live ? ', served live by the Ember Almanac API' : ', from the copy bundled with this site'}.
               Imagery: NASA GIBS Blue Marble. Borders: Natural Earth.
             </p>
             <p>Built for the NASA Space Apps Challenge 2026. An independent project, not a NASA product.</p>

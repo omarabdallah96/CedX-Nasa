@@ -1,0 +1,448 @@
+// HTTP API over the harmonized record. Read-only and stateless: every answer is
+// computed from the packed data files by the same code the website runs.
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { serveStatic } from '@hono/node-server/serve-static';
+import { lastWeek, rangeSummary, selectionVerdict, type RangeSummary } from '../src/lib/analysis.ts';
+import { parseBox } from '../src/lib/coords.ts';
+import type { BBox, Filters } from '../src/lib/harmonize.ts';
+import { ANSWER, monthWording, sourceText, verdictSentence } from '../src/lib/sentence.ts';
+import { toCsv, UnknownCountryError, type Prepared, type Service } from '../src/lib/service.ts';
+import { annualTotals, completeYears, PENTADS, records, yearVerdict, type Verdict } from '../src/lib/stats.ts';
+import { FIRST_DAY, isoDate, MONTHS_LONG, parseIsoDate, spanName } from '../src/lib/time.ts';
+
+export const UNIT = 'active-fire cell-days, VIIRS-equivalent (one ~1 km grid cell with fire on one day)';
+const MAX_JSON_HOTSPOTS = 20_000;
+
+class ApiError extends Error {
+  status: 400 | 404;
+  code: string;
+  constructor(status: 400 | 404, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const r1 = (x: number) => Math.round(x * 10) / 10;
+const r3 = (x: number) => Math.round(x * 1000) / 1000;
+const num = (x: number) => (Number.isFinite(x) ? r1(x) : null);
+
+function verdictJson(v: Verdict) {
+  return {
+    value: r1(v.value),
+    median: r1(v.median),
+    ratio: v.ratio === null ? null : r3(v.ratio),
+    rank: v.rank,
+    of: v.nYears,
+    percentile: r3(v.percentile),
+    level: v.level,
+    answer: ANSWER[v.level],
+    baseline: { firstYear: v.firstYear, lastYear: v.lastYear },
+  };
+}
+
+function flag(value: string | undefined, name: string): boolean {
+  if (value === undefined || value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  throw new ApiError(400, 'bad_parameter', `${name} must be true or false.`);
+}
+
+function int(value: string | undefined, name: string, min: number, max: number): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw new ApiError(400, 'bad_parameter', `${name} must be a whole number from ${min} to ${max}.`);
+  }
+  return n;
+}
+
+export interface AppOptions {
+  service: Service;
+  /** Folder holding index.json and the packed files. */
+  dataDir: string;
+  /** Built website to serve at /, when it exists. */
+  siteDir?: string;
+}
+
+export function createApp({ service, dataDir, siteDir }: AppOptions) {
+  const app = new Hono();
+  const api = new Hono();
+
+  api.use('*', cors({ origin: '*', allowMethods: ['GET', 'HEAD', 'OPTIONS'], maxAge: 86400 }));
+  api.use('*', async (c, next) => {
+    await next();
+    if (c.res.status === 200 && !c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'public, max-age=300');
+  });
+
+  /** Country, filters and area of a request, analysed. */
+  async function prepare(slug: string, query: Record<string, string>): Promise<{ p: Prepared; filters: Filters; place: string }> {
+    const index = await service.index();
+    const manifest = index.countries.find((m) => m.slug === slug);
+    if (!manifest) {
+      throw new ApiError(404, 'unknown_country', `No country "${slug}". Available: ${index.countries.map((m) => m.slug).join(', ')}.`);
+    }
+    let bbox: BBox | null = null;
+    if (query.bbox !== undefined) {
+      const parts = query.bbox.split(',');
+      if (parts.length !== 4) throw new ApiError(400, 'bad_bbox', 'bbox must be west,south,east,north in decimal degrees.');
+      const box = parseBox(parts, manifest);
+      if (!box.ok) throw new ApiError(400, 'bad_bbox', box.message);
+      bbox = box.bbox;
+    }
+    const filters: Filters = {
+      vegOnly: flag(query.vegOnly, 'vegOnly'),
+      dropLowConf: flag(query.dropLowConf, 'dropLowConf'),
+      bbox,
+    };
+    const p = await service.prepare(slug, filters);
+    return { p, filters, place: bbox ? `the selected area of ${manifest.name}` : manifest.name };
+  }
+
+  const head = (p: Prepared, filters: Filters) => ({
+    country: { slug: p.manifest.slug, name: p.manifest.name },
+    area: filters.bbox,
+    filters: { vegOnly: filters.vegOnly, dropLowConf: filters.dropLowConf },
+    coverageEnd: p.index.coverageEnd,
+    unit: UNIT,
+  });
+
+  /** from / to as day indices, clamped to the record. */
+  function dateRange(p: Prepared, query: Record<string, string>, fallback?: [number, number]): [number, number] {
+    const last = p.index.coverageEndDay;
+    const read = (name: 'from' | 'to', def: number | undefined) => {
+      if (query[name] === undefined) {
+        if (def === undefined) throw new ApiError(400, 'missing_parameter', `${name} is required, as YYYY-MM-DD.`);
+        return def;
+      }
+      const d = parseIsoDate(query[name]);
+      if (Number.isNaN(d)) throw new ApiError(400, 'bad_date', `${name} must be a date written as YYYY-MM-DD.`);
+      return d;
+    };
+    const from = read('from', fallback?.[0]);
+    const to = read('to', fallback?.[1]);
+    if (from > to) throw new ApiError(400, 'bad_date', 'from must not be after to.');
+    if (to < FIRST_DAY || from > last) {
+      throw new ApiError(400, 'bad_date', `The record runs from ${isoDate(FIRST_DAY)} to ${isoDate(last)}.`);
+    }
+    return [Math.max(FIRST_DAY, from), Math.min(last, to)];
+  }
+
+  function rangeJson(s: RangeSummary, place: string, what: string) {
+    return {
+      from: isoDate(s.from),
+      to: isoDate(s.to),
+      days: s.days,
+      value: r1(s.harmonized),
+      likelyRange: [r1(s.lo), r1(s.hi)],
+      detections: s.detections,
+      sourceDays: s.sourceDays,
+      busiestDay: s.busiest && { date: isoDate(s.busiest.day), value: r1(s.busiest.value) },
+      comparison: s.verdict && {
+        ...verdictJson(s.verdict),
+        sentence: verdictSentence(s.verdict, what, spanName(s.from, s.to), place),
+      },
+    };
+  }
+
+  api.get('/', async (c) => {
+    const index = await service.index();
+    return c.json({
+      name: 'Ember Almanac API',
+      version: 1,
+      about: 'Harmonized MODIS + VIIRS active-fire record from NASA FIRMS. An independent project, not a NASA product.',
+      coverage: { from: isoDate(FIRST_DAY), to: index.coverageEnd },
+      unit: UNIT,
+      commonQuery: {
+        bbox: 'west,south,east,north in decimal degrees; omit for the whole country',
+        vegOnly: 'true (default) keeps presumed vegetation fires only',
+        dropLowConf: 'true (default) drops low-confidence detections',
+      },
+      endpoints: [
+        'GET /api/v1/health',
+        'GET /api/v1/countries',
+        'GET /api/v1/countries/{slug}/now',
+        'GET /api/v1/countries/{slug}/verdict?year=&month=',
+        'GET /api/v1/countries/{slug}/calendar?mode=harmonized|raw',
+        'GET /api/v1/countries/{slug}/season?year=',
+        'GET /api/v1/countries/{slug}/range?from=YYYY-MM-DD&to=YYYY-MM-DD',
+        'GET /api/v1/countries/{slug}/records',
+        'GET /api/v1/countries/{slug}/hotspots?from=&to=&limit=&format=json|csv',
+        'GET /api/v1/countries/{slug}/method',
+        'GET /api/v1/data/{file}',
+      ],
+    });
+  });
+
+  api.get('/health', async (c) => {
+    const index = await service.index();
+    c.header('Cache-Control', 'no-store');
+    return c.json({
+      ok: true,
+      coverageEnd: index.coverageEnd,
+      generatedAt: index.generatedAt ?? null,
+      countries: index.countries.length,
+    });
+  });
+
+  api.get('/countries', async (c) => {
+    const index = await service.index();
+    const flags = { vegOnly: true, dropLowConf: true, bbox: null };
+    const countries = [];
+    for (const m of index.countries) {
+      const { analysis: a } = await service.prepare(m.slug, flags);
+      countries.push({
+        slug: m.slug,
+        name: m.name,
+        iso: m.iso,
+        bbox: m.bbox,
+        focus: m.focus,
+        detections: a.detections,
+        viirsPerModisCellDay: r3(a.calibration.annual),
+        heldOutError: { monthly: r3(a.validation.mdape), yearly: r3(a.validation.yearlyMdape), rawMonthly: r3(a.validation.mdapeRaw) },
+      });
+    }
+    return c.json({ coverageEnd: index.coverageEnd, generatedAt: index.generatedAt ?? null, countries });
+  });
+
+  api.get('/countries/:slug/now', async (c) => {
+    const { p, filters, place } = await prepare(c.req.param('slug'), c.req.query());
+    const { analysis: a, ctx } = p;
+    const cal = ctx.cal;
+    const last = cal.nDays - 1;
+    const week = lastWeek(a, cal);
+    const year = cal.year[last];
+    const month = cal.month[last];
+    const mv = selectionVerdict(a, cal, year, month);
+    const wording = mv && monthWording(mv, year, month);
+    return c.json({
+      ...head(p, filters),
+      generatedAt: p.index.generatedAt ?? null,
+      week: rangeJson(week, place, `The last 7 days (${spanName(week.from, week.to)} ${cal.year[week.to]})`),
+      month: mv && wording && {
+        year,
+        month: month + 1,
+        name: MONTHS_LONG[month],
+        partialDays: mv.partialDays,
+        ...verdictJson(mv.verdict),
+        source: sourceText(a, cal, year, month).text,
+        sentence: verdictSentence(mv.verdict, wording.what, wording.usual, place),
+      },
+    });
+  });
+
+  api.get('/countries/:slug/verdict', async (c) => {
+    const query = c.req.query();
+    const { p, filters, place } = await prepare(c.req.param('slug'), query);
+    const { analysis: a, ctx } = p;
+    const cal = ctx.cal;
+    const last = cal.nDays - 1;
+    const year = int(query.year, 'year', cal.year[FIRST_DAY], cal.year[last]) ?? cal.year[last];
+    const month = (int(query.month, 'month', 1, 12) ?? cal.month[last] + 1) - 1;
+    const mv = selectionVerdict(a, cal, year, month);
+    if (!mv) {
+      throw new ApiError(404, 'no_coverage', `The record has no data for ${MONTHS_LONG[month]} ${year}. It runs from ${isoDate(FIRST_DAY)} to ${p.index.coverageEnd}.`);
+    }
+    const yi = a.monthsH.years.indexOf(year);
+    const wording = monthWording(mv, year, month);
+    const yv = yearVerdict(a.monthsH, year);
+    return c.json({
+      ...head(p, filters),
+      period: { year, month: month + 1, name: MONTHS_LONG[month], partialDays: mv.partialDays },
+      ...verdictJson(mv.verdict),
+      likelyRange: [num(a.monthsLo.values[yi][month]), num(a.monthsHi.values[yi][month])],
+      source: sourceText(a, cal, year, month).text,
+      sentence: verdictSentence(mv.verdict, wording.what, wording.usual, place),
+      wholeYear: yv && verdictJson(yv),
+    });
+  });
+
+  api.get('/countries/:slug/calendar', async (c) => {
+    const query = c.req.query();
+    const { p, filters } = await prepare(c.req.param('slug'), query);
+    const a = p.analysis;
+    const mode = query.mode ?? 'harmonized';
+    if (mode !== 'harmonized' && mode !== 'raw') throw new ApiError(400, 'bad_parameter', 'mode must be harmonized or raw.');
+    const mm = mode === 'raw' ? a.monthsNaive : a.monthsH;
+    const totals = annualTotals(mm);
+    return c.json({
+      ...head(p, filters),
+      mode,
+      unit: mode === 'raw' ? 'raw detections (MODIS until 2012, VIIRS after): not comparable across 2012' : UNIT,
+      months: MONTHS_LONG,
+      partialMonth: mm.partial && { year: mm.partial.year, month: mm.partial.month + 1, days: mm.partial.days },
+      years: mm.years.map((year, yi) => ({
+        year,
+        complete: totals[yi].complete,
+        total: r1(totals[yi].total),
+        values: mm.values[yi].map(num),
+        ...(mode === 'harmonized' && {
+          low: a.monthsLo.values[yi].map(num),
+          high: a.monthsHi.values[yi].map(num),
+        }),
+      })),
+      usual: mode === 'harmonized'
+        ? {
+          baselineYears: [a.climate.years[0], a.climate.years[a.climate.years.length - 1]],
+          median: a.climate.median.map(r1),
+          p10: a.climate.p10.map(r1),
+          p90: a.climate.p90.map(r1),
+        }
+        : null,
+    });
+  });
+
+  api.get('/countries/:slug/season', async (c) => {
+    const query = c.req.query();
+    const { p, filters } = await prepare(c.req.param('slug'), query);
+    const { analysis: a, ctx } = p;
+    const last = ctx.cal.nDays - 1;
+    const year = int(query.year, 'year', ctx.cal.year[FIRST_DAY], ctx.cal.year[last]) ?? ctx.cal.year[last];
+    const baseline = completeYears(a.monthsH);
+    return c.json({
+      ...head(p, filters),
+      year,
+      bins: { count: PENTADS, days: 5, note: 'bin 0 starts on 1 January; the last bin also holds 31 December of leap years' },
+      values: (a.season.byYear.get(year) ?? []).map(r1),
+      median: a.season.median.map(r1),
+      p10: a.season.p10.map(r1),
+      p90: a.season.p90.map(r1),
+      baselineYears: [baseline[0], baseline[baseline.length - 1]],
+      peakSeason: a.peak && {
+        firstMonth: a.peak.start + 1,
+        months: a.peak.length,
+        names: Array.from({ length: a.peak.length }, (_, k) => MONTHS_LONG[(a.peak!.start + k) % 12]),
+        shareOfTypicalYear: r3(a.peak.share),
+      },
+    });
+  });
+
+  api.get('/countries/:slug/range', async (c) => {
+    const query = c.req.query();
+    const { p, filters, place } = await prepare(c.req.param('slug'), query);
+    const [from, to] = dateRange(p, query);
+    const cal = p.ctx.cal;
+    const s = rangeSummary(p.analysis, cal, from, to);
+    const { h, src } = p.analysis.harmonized;
+    const what = `${spanName(from, to)} ${cal.year[to]}`;
+    return c.json({
+      ...head(p, filters),
+      ...rangeJson(s, place, what),
+      // Daily values for ranges short enough to chart.
+      daily: s.days <= 366
+        ? Array.from({ length: s.days }, (_, k) => ({ date: isoDate(from + k), value: r1(h[from + k]), source: SOURCE[src[from + k]] }))
+        : null,
+    });
+  });
+
+  api.get('/countries/:slug/records', async (c) => {
+    const query = c.req.query();
+    const { p, filters } = await prepare(c.req.param('slug'), query);
+    const top = int(query.top, 'top', 1, 50) ?? 5;
+    const r = records(p.analysis.monthsH, top);
+    return c.json({
+      ...head(p, filters),
+      years: r.years.map((y) => ({ year: y.year, value: r1(y.total) })),
+      months: r.months.map((m) => ({ year: m.year, month: m.month + 1, name: MONTHS_LONG[m.month], value: r1(m.value) })),
+    });
+  });
+
+  api.get('/countries/:slug/hotspots', async (c) => {
+    const query = c.req.query();
+    const { p, filters } = await prepare(c.req.param('slug'), query);
+    const last = p.index.coverageEndDay;
+    const [from, to] = dateRange(p, query, [last - 6, last]);
+    const format = query.format ?? 'json';
+    if (format !== 'json' && format !== 'csv') throw new ApiError(400, 'bad_parameter', 'format must be json or csv.');
+    const slug = p.manifest.slug;
+    if (format === 'csv') {
+      const { rows } = await service.rows(slug, filters, from, to);
+      c.header('Content-Type', 'text/csv; charset=utf-8');
+      c.header('Content-Disposition', `attachment; filename="ember-almanac_${slug}_${isoDate(from)}_${isoDate(to)}.csv"`);
+      return c.body(toCsv(rows));
+    }
+    const limit = int(query.limit, 'limit', 1, MAX_JSON_HOTSPOTS) ?? 5000;
+    const { rows, total } = await service.rows(slug, filters, from, to, limit);
+    return c.json({
+      ...head(p, filters),
+      from: isoDate(from),
+      to: isoDate(to),
+      total,
+      returned: rows.length,
+      truncated: total > rows.length,
+      note: 'harmonized_weight sums to the harmonized cell-days of the period. NOAA-20 rows appear only on days Suomi-NPP did not observe.',
+      hotspots: rows,
+    });
+  });
+
+  api.get('/countries/:slug/method', async (c) => {
+    const { p, filters } = await prepare(c.req.param('slug'), c.req.query());
+    const { calibration: k, validation: v } = p.analysis;
+    return c.json({
+      ...head(p, filters),
+      cellDegrees: 0.01,
+      viirsPerModisCellDay: { annual: r3(k.annual), byMonth: k.ratio.map(r3), terraOnlyByMonth: k.ratioTerra.map(r3) },
+      noaa20PerSuomiNppCellDay: r3(k.ratioN20),
+      fittedLocally: k.usedPrior,
+      heldOutValidation: {
+        note: 'Leave one overlap year out, predict it from MODIS alone, compare with VIIRS. Median absolute error.',
+        monthlyError: r3(v.mdape),
+        monthlyErrorRaw: r3(v.mdapeRaw),
+        yearlyError: r3(v.yearlyMdape),
+        yearlyErrorRaw: r3(v.yearlyMdapeRaw),
+        bias: r3(v.bias),
+        biasRaw: r3(v.biasRaw),
+        months: v.nMonths,
+        years: v.nYears,
+        thin: v.thin,
+      },
+      suomiNppLastDay: p.index.snppEndDay != null ? isoDate(p.index.snppEndDay) : null,
+      nearRealTimeFrom: Object.fromEntries(Object.entries(p.index.nrtFromDay ?? {}).map(([sensor, d]) => [sensor, isoDate(d)])),
+      viirsOutages: p.index.viirsOutages.map((o) => ({ from: o.from, to: o.to, days: o.days })),
+      limits: [
+        'Counts detections, not burned area. Cloud and smoke hide fires from every sensor.',
+        'A month in which MODIS saw nothing converts to zero, so quiet seasons before 2012 are understated where fires are small.',
+        'The most recent months are near-real-time data and can still be revised by NASA.',
+      ],
+    });
+  });
+
+  // The packed files themselves: the website loads these when the API is reachable.
+  api.get('/data/:file', async (c) => {
+    const file = c.req.param('file');
+    if (!/^[a-z0-9-]+\.(json|bin|geojson)$/.test(file)) throw new ApiError(404, 'not_found', 'No such data file.');
+    const full = path.join(dataDir, file);
+    let info;
+    try {
+      info = await stat(full);
+    } catch {
+      throw new ApiError(404, 'not_found', 'No such data file.');
+    }
+    const etag = `"${info.size}-${Math.floor(info.mtimeMs)}"`;
+    c.header('ETag', etag);
+    c.header('Cache-Control', 'public, max-age=60');
+    if (c.req.header('If-None-Match') === etag) return c.body(null, 304);
+    const body = await readFile(full);
+    c.header('Content-Type', file.endsWith('.bin') ? 'application/octet-stream' : 'application/json; charset=utf-8');
+    return c.body(new Uint8Array(body));
+  });
+
+  api.notFound((c) => c.json({ error: { code: 'not_found', message: `No such endpoint: ${c.req.path}. See /api/v1 for the list.` } }, 404));
+  api.onError((err, c) => {
+    if (err instanceof ApiError) return c.json({ error: { code: err.code, message: err.message } }, err.status);
+    if (err instanceof UnknownCountryError) return c.json({ error: { code: 'unknown_country', message: err.message } }, 404);
+    console.error(err);
+    return c.json({ error: { code: 'internal', message: 'The server could not answer this request.' } }, 500);
+  });
+
+  app.get('/api/v1/', (c) => c.redirect('/api/v1'));
+  app.route('/api/v1', api);
+  app.all('/api/*', (c) => c.json({ error: { code: 'not_found', message: 'The API lives under /api/v1.' } }, 404));
+  if (siteDir) app.use('*', serveStatic({ root: path.relative(process.cwd(), siteDir) || '.' }));
+  return app;
+}
+
+/** Names for the `src` codes of the harmonized record. */
+const SOURCE = ['none', 'terra-scaled', 'modis-scaled', 'viirs', 'modis-gap-fill', 'noaa20'];
