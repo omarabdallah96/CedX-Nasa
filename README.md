@@ -16,6 +16,7 @@ Built for the NASA Space Apps Challenge 2026, challenge "Harmonization of MODIS 
 - **Evidence.** Held-out validation, conversion factors by month, and what the record cannot tell you.
 - **Exports.** CSV of every hotspot in the period, with its weight in the harmonized record; the daily series and the whole calendar table as CSV; the calendar and the rings as PNG cards.
 - **API.** The same answers as JSON, for a phone app or anything else.
+- **For the phone app.** Live hotspots minutes old from the FIRMS near-real-time feed, and ground reports (label, photo, compass bearing) that phones share so smoke seen by several people can be located.
 - **English and Arabic.** The whole site, the charts and the PNG cards switch language; Arabic is laid out right to left. The site opens in the browser's language, the switch in the header remembers the choice, and `?lang=ar` or `?lang=en` in the address forces one. The API and the CSV column names stay in English.
 
 ## Run it
@@ -41,7 +42,7 @@ The key is read from the environment on the server only. It is never sent to the
 
 ## API
 
-Read-only JSON under `/api/v1`, open CORS, no key needed. Every answer is computed by the same code the website runs (`src/lib`), so the two cannot disagree.
+JSON under `/api/v1`, open CORS, no key needed. The record endpoints are read-only; Every answer is computed by the same code the website runs (`src/lib`), so the two cannot disagree.
 
 | Endpoint | Returns |
 |---|---|
@@ -56,7 +57,12 @@ Read-only JSON under `/api/v1`, open CORS, no key needed. Every answer is comput
 | `GET /countries/{slug}/records?top=` | Most active years and months |
 | `GET /countries/{slug}/hotspots?from=&to=&limit=&format=json\|csv` | Detections with their harmonized weight |
 | `GET /countries/{slug}/method` | Conversion factors, validation, limits |
+| `GET /countries/{slug}/live?hours=` | FIRMS near-real-time detections of the last 1–72 hours (default 48), fetched at most every 10 minutes. Needs `FIRMS_MAP_KEY` on the server, else 503 |
 | `GET /data/{file}` | The packed data files the website loads |
+| `POST /reports` | A ground report from the phone app, as `multipart/form-data` (optional `photo`: JPEG, PNG or WebP up to 5 MB) or JSON. Returns the report and a `deleteToken` |
+| `GET /reports?bbox=&country=&since=&limit=` | Reports in an area since a time (default: the last 7 days) |
+| `GET /reports/{id}` · `GET /reports/{id}/photo` | One report; its photo |
+| `DELETE /reports/{id}` | Deletes a report; needs its `deleteToken` in the `X-Report-Token` header |
 
 Common query: `bbox=west,south,east,north` (a box inside the country), `vegOnly=true|false`, `dropLowConf=true|false`. Dates are `YYYY-MM-DD`, months are 1–12. Errors are `{ "error": { "code", "message" } }` with status 400 or 404.
 
@@ -66,7 +72,9 @@ curl "http://localhost:8787/api/v1/countries/greece/verdict?year=2021&month=8"
 curl "http://localhost:8787/api/v1/countries/portugal/range?from=2017-10-10&to=2017-10-20&bbox=-8.6,39.6,-7.4,40.6"
 ```
 
-There are no accounts, no database and no rate limiting; put it behind a proxy that limits requests before exposing it widely.
+Report fields: `deviceId` and `clientId` (4–64 letters, digits, `-`, `_`; the same pair sent twice returns the first copy, so retries are safe), `lat`, `lon`, `createdAt` (ISO time, within 30 days), `label` (`wildfire`, `smoke`, `agriculturalBurn`, `industrial`, `falseAlarm`, `unsure`), and optionally `note` (≤ 500 characters), `bearing` (0–360°, where the reporter pointed at the smoke), `hotspotSensor`, `hotspotTime`. The device id is never returned. Reports are kept 90 days.
+
+There are no accounts. Reports are stored in SQLite with their photos under `STORAGE_DIR` (default `./storage`; a volume in Docker). Each client gets 1200 requests per 10 minutes and 30 new reports per hour (`RATE_LIMIT_PER_10_MIN`, `REPORTS_PER_HOUR`); behind a proxy the client is the first `X-Forwarded-For` address. Put a proxy limit in front as well before exposing it widely.
 
 ## How the two records are stitched
 
@@ -103,7 +111,7 @@ The factor differs fourfold between these four countries, which is why it is fit
 pipeline/   fetch-firms.mjs · fetch-recent.mjs · clip.mjs · pack.mjs · boundaries.mjs · summarize.ts
 src/lib/    harmonize.ts · stats.ts · analysis.ts · service.ts · sentence.ts · rings.ts · coords.ts · time.ts   (+ harmonize.test.ts)
 src/worker/ analysis.worker.ts   runs lib/service.ts off the main thread
-server/     app.ts (routes) · main.ts · refresh.ts   runs the same lib/service.ts   (+ api.test.ts)
+server/     app.ts (routes) · main.ts · refresh.ts · live.ts (FIRMS NRT) · reports.ts (SQLite) · ratelimit.ts   runs the same lib/service.ts   (+ api.test.ts, phone.test.ts)
 src/components/  MapPanel · Verdict · NowCard · PeriodPanel · FireRings · BurnCalendar · Records · SeasonChart · TrustPanel · ExportMenu · Intro
 src/i18n/   en.tsx (English wording, and the shape every language fills) · ar.tsx (Arabic) · index.tsx (which language is in use)   (+ i18n.test.ts)
 ```

@@ -10,12 +10,13 @@ export const OUT_DIR = path.join(ROOT, 'public', 'data');
 // FIRMS yearly per-country archive (standard-processing science-quality files).
 export const FIRMS_BASE = 'https://firms.modaps.eosdis.nasa.gov/data/country';
 
-// `firms` is the country name exactly as it appears in FIRMS archive file names.
+// `firms` is the country name exactly as it appears in FIRMS archive file names;
+// `ar` is the Arabic name the API gives the phone app.
 export const COUNTRIES = [
-  { slug: 'portugal', name: 'Portugal', firms: 'Portugal', iso: 'PRT' },
-  { slug: 'greece', name: 'Greece', firms: 'Greece', iso: 'GRC' },
-  { slug: 'lebanon', name: 'Lebanon', firms: 'Lebanon', iso: 'LBN' },
-  { slug: 'cyprus', name: 'Cyprus', firms: 'Cyprus', iso: 'CYP' },
+  { slug: 'portugal', name: 'Portugal', firms: 'Portugal', iso: 'PRT', ar: 'البرتغال' },
+  { slug: 'greece', name: 'Greece', firms: 'Greece', iso: 'GRC', ar: 'اليونان' },
+  { slug: 'lebanon', name: 'Lebanon', firms: 'Lebanon', iso: 'LBN', ar: 'لبنان' },
+  { slug: 'cyprus', name: 'Cyprus', firms: 'Cyprus', iso: 'CYP', ar: 'قبرص' },
 ];
 
 export const SENSORS = [

@@ -1,10 +1,18 @@
-// HTTP API over the harmonized record. Read-only and stateless: every answer is
-// computed from the packed data files by the same code the website runs.
+// HTTP API over the harmonized record. Every record answer is computed from the
+// packed data files by the same code the website runs. Two additions serve the
+// phone app: live FIRMS hotspots, and ground reports people send from the field.
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
+import { getConnInfo } from '@hono/node-server/conninfo';
+import { bodyLimit } from 'hono/body-limit';
+import type { Context } from 'hono';
+import { COUNTRIES } from '../pipeline/config.mjs';
+import { LiveUnavailableError, MAX_HOURS, type Live } from './live.ts';
+import { createRateLimit } from './ratelimit.ts';
+import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
 import { lastWeek, rangeSummary, selectionVerdict, type RangeSummary } from '../src/lib/analysis.ts';
 import { parseBox } from '../src/lib/coords.ts';
 import type { BBox, Filters } from '../src/lib/harmonize.ts';
@@ -16,10 +24,12 @@ import { FIRST_DAY, isoDate, MONTHS_LONG, parseIsoDate, spanName } from '../src/
 export const UNIT = 'active-fire cell-days, VIIRS-equivalent (one ~1 km grid cell with fire on one day)';
 const MAX_JSON_HOTSPOTS = 20_000;
 
+type ErrorStatus = 400 | 403 | 404 | 413 | 429 | 503;
+
 class ApiError extends Error {
-  status: 400 | 404;
+  status: ErrorStatus;
   code: string;
-  constructor(status: 400 | 404, code: string, message: string) {
+  constructor(status: ErrorStatus, code: string, message: string) {
     super(message);
     this.status = status;
     this.code = code;
@@ -65,16 +75,65 @@ export interface AppOptions {
   dataDir: string;
   /** Built website to serve at /, when it exists. */
   siteDir?: string;
+  /** Ground reports from the phone app; the /reports endpoints answer 503 without it. */
+  reports?: ReportStore;
+  /** Live FIRMS hotspots; /live answers 503 without it. */
+  live?: Live;
+  /** Requests per client per 10 minutes across the API (0 turns limiting off). */
+  requestsPer10Min?: number;
+  /** New reports per client per hour. */
+  reportsPerHour?: number;
 }
 
-export function createApp({ service, dataDir, siteDir }: AppOptions) {
+/** Arabic names, from pipeline/config.mjs. */
+const NAME_AR = new Map<string, string>(COUNTRIES.map((c: { slug: string; ar?: string }) => [c.slug, c.ar ?? '']));
+
+const SAFE_ID = /^[A-Za-z0-9_-]{4,64}$/;
+
+/** First bytes of the photo formats accepted, so the server never stores anything else. */
+function looksLike(type: string, b: Uint8Array): boolean {
+  if (type === 'image/jpeg') return b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (type === 'image/png') return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
+  if (type === 'image/webp') return String.fromCharCode(...b.slice(0, 4)) === 'RIFF' && String.fromCharCode(...b.slice(8, 12)) === 'WEBP';
+  return false;
+}
+
+/** Who is asking: the first X-Forwarded-For hop behind a proxy, else the socket address. */
+function clientKey(c: Context): string {
+  const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
+  if (forwarded) return forwarded;
+  try {
+    return getConnInfo(c).remote.address ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+export function createApp({ service, dataDir, siteDir, reports, live, requestsPer10Min = 1200, reportsPerHour = 30 }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
-  api.use('*', cors({ origin: '*', allowMethods: ['GET', 'HEAD', 'OPTIONS'], maxAge: 86400 }));
+  api.use('*', cors({
+    origin: '*',
+    allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'X-Report-Token'],
+    maxAge: 86400,
+  }));
+  if (requestsPer10Min > 0) {
+    const limiter = createRateLimit({ limit: requestsPer10Min, windowMs: 10 * 60_000 });
+    api.use('*', async (c, next) => {
+      if (c.req.method === 'OPTIONS') return next();
+      const wait = limiter.take(clientKey(c));
+      if (wait > 0) {
+        c.header('Retry-After', String(wait));
+        throw new ApiError(429, 'rate_limited', `Too many requests. Try again in ${wait} seconds.`);
+      }
+      await next();
+    });
+  }
   api.use('*', async (c, next) => {
     await next();
-    if (c.res.status === 200 && !c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'public, max-age=300');
+    if (c.req.method === 'GET' && c.res.status === 200 && !c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'public, max-age=300');
   });
 
   /** Country, filters and area of a request, analysed. */
@@ -171,7 +230,13 @@ export function createApp({ service, dataDir, siteDir }: AppOptions) {
         'GET /api/v1/countries/{slug}/records',
         'GET /api/v1/countries/{slug}/hotspots?from=&to=&limit=&format=json|csv',
         'GET /api/v1/countries/{slug}/method',
+        'GET /api/v1/countries/{slug}/live?hours=',
         'GET /api/v1/data/{file}',
+        'POST /api/v1/reports',
+        'GET /api/v1/reports?bbox=&country=&since=&limit=',
+        'GET /api/v1/reports/{id}',
+        'GET /api/v1/reports/{id}/photo',
+        'DELETE /api/v1/reports/{id}   (X-Report-Token header)',
       ],
     });
   });
@@ -196,6 +261,7 @@ export function createApp({ service, dataDir, siteDir }: AppOptions) {
       countries.push({
         slug: m.slug,
         name: m.name,
+        nameAr: NAME_AR.get(m.slug) || m.name,
         iso: m.iso,
         bbox: m.bbox,
         focus: m.focus,
@@ -427,6 +493,188 @@ export function createApp({ service, dataDir, siteDir }: AppOptions) {
     const body = await readFile(full);
     c.header('Content-Type', file.endsWith('.bin') ? 'application/octet-stream' : 'application/json; charset=utf-8');
     return c.body(new Uint8Array(body));
+  });
+
+  // Live detections from the FIRMS near-real-time feed, minutes old instead of a day.
+  api.get('/countries/:slug/live', async (c) => {
+    const slug = c.req.param('slug');
+    const index = await service.index();
+    const manifest = index.countries.find((m) => m.slug === slug);
+    if (!manifest) throw new ApiError(404, 'unknown_country', `No country "${slug}". Available: ${index.countries.map((m) => m.slug).join(', ')}.`);
+    if (!live?.available) throw new ApiError(503, 'live_unavailable', 'Live hotspots are not configured on this server.');
+    const hours = int(c.req.query('hours'), 'hours', 1, MAX_HOURS) ?? 48;
+    let answer;
+    try {
+      answer = await live.hotspots(manifest.iso, hours);
+    } catch (err) {
+      if (err instanceof LiveUnavailableError) throw new ApiError(503, 'live_unavailable', 'NASA FIRMS did not answer. Try again in a few minutes.');
+      throw err;
+    }
+    c.header('Cache-Control', 'public, max-age=120');
+    return c.json({
+      country: { slug: manifest.slug, name: manifest.name },
+      source: 'NASA FIRMS near-real-time (MODIS, VIIRS Suomi-NPP, NOAA-20, NOAA-21)',
+      hours,
+      fetchedAt: answer.fetchedAt,
+      missingSources: answer.missing,
+      note: 'Near-real-time detections are not filtered for industrial sites and can still be revised by NASA.',
+      count: answer.hotspots.length,
+      hotspots: answer.hotspots,
+    });
+  });
+
+  // ---- Ground reports from the phone app ----
+  const reportLimiter = createRateLimit({ limit: reportsPerHour, windowMs: 3_600_000 });
+  const needReports = () => {
+    if (!reports) throw new ApiError(503, 'reports_unavailable', 'Reports are not enabled on this server.');
+    return reports;
+  };
+
+  api.post('/reports', bodyLimit({
+    maxSize: MAX_PHOTO_BYTES + 64 * 1024,
+    onError: () => { throw new ApiError(413, 'too_large', `A report with its photo must be under ${MAX_PHOTO_BYTES / 1024 / 1024} MB.`); },
+  }), async (c) => {
+    const store = needReports();
+    const wait = reportLimiter.take(clientKey(c));
+    if (wait > 0) {
+      c.header('Retry-After', String(wait));
+      throw new ApiError(429, 'rate_limited', `Too many reports from this connection. Try again in ${Math.ceil(wait / 60)} minutes.`);
+    }
+
+    // multipart/form-data (with an optional "photo" file) or plain JSON.
+    let fields: Record<string, unknown>;
+    let photoFile: File | null = null;
+    const type = c.req.header('content-type') ?? '';
+    if (type.startsWith('multipart/form-data')) {
+      const body = await c.req.parseBody();
+      fields = body;
+      if (body.photo instanceof File) photoFile = body.photo;
+    } else {
+      try {
+        fields = await c.req.json();
+      } catch {
+        throw new ApiError(400, 'bad_body', 'Send multipart/form-data or JSON.');
+      }
+    }
+
+    const text = (name: string, max: number, required = false): string | null => {
+      const v = fields[name];
+      if (v === undefined || v === null || v === '') {
+        if (required) throw new ApiError(400, 'missing_parameter', `${name} is required.`);
+        return null;
+      }
+      if (typeof v !== 'string' || v.length > max) throw new ApiError(400, 'bad_parameter', `${name} must be text of at most ${max} characters.`);
+      return v;
+    };
+    const number = (name: string, min: number, max: number, required = false): number | null => {
+      const v = fields[name];
+      if (v === undefined || v === null || v === '') {
+        if (required) throw new ApiError(400, 'missing_parameter', `${name} is required.`);
+        return null;
+      }
+      const n = typeof v === 'number' ? v : Number(v);
+      if (!Number.isFinite(n) || n < min || n > max) throw new ApiError(400, 'bad_parameter', `${name} must be a number from ${min} to ${max}.`);
+      return n;
+    };
+    const time = (name: string, required = false): string | null => {
+      const v = text(name, 40, required);
+      if (v === null) return null;
+      const t = Date.parse(v);
+      if (Number.isNaN(t)) throw new ApiError(400, 'bad_parameter', `${name} must be an ISO 8601 time.`);
+      return new Date(t).toISOString();
+    };
+
+    const deviceId = text('deviceId', 64, true)!;
+    const clientId = text('clientId', 64, true)!;
+    if (!SAFE_ID.test(deviceId) || !SAFE_ID.test(clientId)) {
+      throw new ApiError(400, 'bad_parameter', 'deviceId and clientId must be 4–64 letters, digits, - or _.');
+    }
+    const label = text('label', 40, true) as Label;
+    if (!LABELS.includes(label)) throw new ApiError(400, 'bad_parameter', `label must be one of ${LABELS.join(', ')}.`);
+    const createdAt = time('createdAt', true)!;
+    const age = Date.now() - Date.parse(createdAt);
+    if (age < -10 * 60_000 || age > 30 * 86_400_000) {
+      throw new ApiError(400, 'bad_parameter', 'createdAt must be within the last 30 days.');
+    }
+
+    const report: NewReport = {
+      deviceId,
+      clientId,
+      lat: number('lat', -90, 90, true)!,
+      lon: number('lon', -180, 180, true)!,
+      createdAt,
+      label,
+      note: text('note', MAX_NOTE) ?? '',
+      bearing: number('bearing', 0, 360),
+      hotspotSensor: text('hotspotSensor', 40),
+      hotspotTime: time('hotspotTime'),
+    };
+
+    let photo: { bytes: Uint8Array<ArrayBuffer>; type: string } | undefined;
+    if (photoFile) {
+      const bytes = new Uint8Array(await photoFile.arrayBuffer());
+      const kind = Object.keys(PHOTO_TYPES).find((t) => looksLike(t, bytes));
+      if (!kind) throw new ApiError(400, 'bad_photo', 'photo must be a JPEG, PNG or WebP image.');
+      if (bytes.length > MAX_PHOTO_BYTES) throw new ApiError(413, 'too_large', 'photo is too large.');
+      photo = { bytes, type: kind };
+    }
+
+    const { report: saved, deleteToken, created } = await store.add(report, photo);
+    return c.json({ report: saved, deleteToken }, created ? 201 : 200);
+  });
+
+  api.get('/reports', async (c) => {
+    const store = needReports();
+    const query = c.req.query();
+    let bbox: [number, number, number, number] | null = null;
+    if (query.country !== undefined) {
+      const index = await service.index();
+      const m = index.countries.find((x) => x.slug === query.country);
+      if (!m) throw new ApiError(404, 'unknown_country', `No country "${query.country}".`);
+      bbox = m.bbox as [number, number, number, number];
+    }
+    if (query.bbox !== undefined) {
+      const parts = query.bbox.split(',').map(Number);
+      if (parts.length !== 4 || parts.some((x) => !Number.isFinite(x)) || parts[0] > parts[2] || parts[1] > parts[3]) {
+        throw new ApiError(400, 'bad_bbox', 'bbox must be west,south,east,north in decimal degrees.');
+      }
+      bbox = parts as [number, number, number, number];
+    }
+    let since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+    if (query.since !== undefined) {
+      const t = Date.parse(query.since);
+      if (Number.isNaN(t)) throw new ApiError(400, 'bad_parameter', 'since must be an ISO 8601 time.');
+      since = new Date(t).toISOString();
+    }
+    const limit = int(query.limit, 'limit', 1, 1000) ?? 500;
+    const list = store.list({ bbox, since, limit });
+    c.header('Cache-Control', 'no-store');
+    return c.json({ since, count: list.length, reports: list });
+  });
+
+  api.get('/reports/:id', (c) => {
+    const r = needReports().get(c.req.param('id'));
+    if (!r) throw new ApiError(404, 'not_found', 'No such report.');
+    c.header('Cache-Control', 'no-store');
+    return c.json({ report: r });
+  });
+
+  api.get('/reports/:id/photo', async (c) => {
+    const photo = await needReports().photo(c.req.param('id'));
+    if (!photo) throw new ApiError(404, 'not_found', 'This report has no photo.');
+    c.header('Content-Type', photo.type);
+    c.header('Cache-Control', 'public, max-age=86400, immutable');
+    c.header('X-Content-Type-Options', 'nosniff');
+    return c.body(photo.bytes);
+  });
+
+  api.delete('/reports/:id', async (c) => {
+    const token = c.req.header('x-report-token');
+    if (!token) throw new ApiError(403, 'forbidden', 'X-Report-Token is required.');
+    const result = await needReports().remove(c.req.param('id'), token);
+    if (result === 'not_found') throw new ApiError(404, 'not_found', 'No such report.');
+    if (result === 'forbidden') throw new ApiError(403, 'forbidden', 'This token does not match the report.');
+    return c.json({ deleted: true });
   });
 
   api.notFound((c) => c.json({ error: { code: 'not_found', message: `No such endpoint: ${c.req.path}. See /api/v1 for the list.` } }, 404));
