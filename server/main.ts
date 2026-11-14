@@ -33,6 +33,6 @@ const app = createApp({ service, dataDir, siteDir: existsSync(siteDir) ? siteDir
 const port = Number(process.env.PORT) || 8787;
 
 serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`Ember Almanac API on http://localhost:${info.port}/api/v1`);
+  console.log(`Firesight API on http://localhost:${info.port}/api/v1`);
   startRefresh(service);
 });

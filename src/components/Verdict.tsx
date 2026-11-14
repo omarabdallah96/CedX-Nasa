@@ -1,21 +1,13 @@
 import { selectionVerdict, type Analysis } from '../lib/analysis.ts';
-import { fmtCount, fmtRatio, ordinal } from '../lib/format.ts';
-import { ANSWER, monthWording, sourceText, verdictSentence } from '../lib/sentence.ts';
-import { yearVerdict, type Level, type Verdict as V } from '../lib/stats.ts';
-import { FIRST_DAY, longDate, MONTHS_LONG, type Calendar } from '../lib/time.ts';
+import { useI18n } from '../i18n/index.tsx';
+import { fmtCount } from '../lib/format.ts';
+import { yearVerdict, type Level } from '../lib/stats.ts';
+import { FIRST_DAY, type Calendar } from '../lib/time.ts';
 import type { Selection } from './FireRings.tsx';
 
 const ICON: Record<Level, string> = {
   record: '▲▲', 'far-above': '▲▲', above: '▲', typical: '●', below: '▼', 'far-below': '▼▼', quiet: '●',
 };
-
-/** Short figure for the badge: how the period compares with the usual one. */
-function badgeText(v: V, monthName: string): string {
-  if (v.ratio === null) return v.value > 0 ? `The usual ${monthName} has no fire` : 'No fire detected';
-  if (v.ratio >= 1.05) return `${fmtRatio(v.ratio)} the usual ${monthName}`;
-  if (v.ratio <= 0.95) return `${Math.round(v.ratio * 100)}% of the usual ${monthName}`;
-  return `Level with the usual ${monthName}`;
-}
 
 /** Named selections offered as shortcuts. */
 export function shortcuts(a: Analysis, cal: Calendar): { latest: Selection; latestPeak: Selection; mostActive: Selection } {
@@ -47,14 +39,15 @@ interface Props {
 }
 
 export function Verdict({ analysis, cal, sel, onSelect, place }: Props) {
+  const { t } = useI18n();
   const pv = selectionVerdict(analysis, cal, sel.year, sel.month);
   const v = pv?.verdict ?? null;
   // An unfinished month is judged over the days it has so far.
   const partial = pv?.partialDays ?? null;
-  const wording = pv ? monthWording(pv, sel.year, sel.month) : null;
+  const wording = pv ? t.monthWording(pv, sel.year, sel.month) : null;
   const y = yearVerdict(analysis.monthsH, sel.year);
   const sc = shortcuts(analysis, cal);
-  const monthName = MONTHS_LONG[sel.month];
+  const monthName = t.monthsLong[sel.month];
   const firstYear = cal.year[FIRST_DAY];
   const firstMonth = cal.month[FIRST_DAY];
   const lastYear = sc.latest.year;
@@ -67,70 +60,65 @@ export function Verdict({ analysis, cal, sel, onSelect, place }: Props) {
   const yi = analysis.monthsH.years.indexOf(sel.year);
   const lo = yi >= 0 ? analysis.monthsLo.values[yi][sel.month] : NaN;
   const hi = yi >= 0 ? analysis.monthsHi.values[yi][sel.month] : NaN;
-  const source = sourceText(analysis, cal, sel.year, sel.month);
+  const source = t.sourceText(analysis, cal, sel.year, sel.month);
   const is = (a: Selection) => a.year === sel.year && a.month === sel.month;
 
   return (
     <section className="verdict" aria-labelledby="verdict-q">
       <div className="verdict-pick">
-        <button type="button" className="icon-btn" onClick={() => go(index - 1)} disabled={index <= minIndex} aria-label="Previous month">‹</button>
-        <label className="sr-only" htmlFor="pick-month">Month</label>
+        <button type="button" className="icon-btn" onClick={() => go(index - 1)} disabled={index <= minIndex} aria-label={t.verdict.prevMonth}>‹</button>
+        <label className="sr-only" htmlFor="pick-month">{t.verdict.month}</label>
         <select id="pick-month" value={sel.month} onChange={(e) => go(Math.max(minIndex, Math.min(maxIndex, sel.year * 12 + Number(e.target.value))))}>
-          {MONTHS_LONG.map((m, i) => <option key={m} value={i}>{m}</option>)}
+          {t.monthsLong.map((m, i) => <option key={m} value={i}>{m}</option>)}
         </select>
-        <label className="sr-only" htmlFor="pick-year">Year</label>
+        <label className="sr-only" htmlFor="pick-year">{t.verdict.year}</label>
         <select id="pick-year" value={sel.year} onChange={(e) => go(Math.max(minIndex, Math.min(maxIndex, Number(e.target.value) * 12 + sel.month)))}>
           {years.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
         </select>
-        <button type="button" className="icon-btn" onClick={() => go(index + 1)} disabled={index >= maxIndex} aria-label="Next month">›</button>
+        <button type="button" className="icon-btn" onClick={() => go(index + 1)} disabled={index >= maxIndex} aria-label={t.verdict.nextMonth}>›</button>
       </div>
 
-      <p id="verdict-q" className="eyebrow">{monthName} {sel.year}{partial ? ' so far' : ''} in {place}: is this normal?</p>
+      <p id="verdict-q" className="eyebrow">{t.verdict.question(monthName, sel.year, !!partial, place)}</p>
       {v && wording ? (
         <>
-          <h2 className="verdict-answer" data-level={v.level}>{ANSWER[v.level]}</h2>
+          <h2 className="verdict-answer" data-level={v.level}>{t.answer[v.level]}</h2>
           <p className="verdict-badge" data-level={v.level}>
-            <span aria-hidden="true">{ICON[v.level]}</span> {badgeText(v, wording.usual)}
+            <span aria-hidden="true">{ICON[v.level]}</span> {t.verdict.badge(v, wording.usual)}
           </p>
-          <p className="verdict-text">{verdictSentence(v, wording.what, wording.usual, place)}</p>
+          <p className="verdict-text">{t.verdictSentence(v, wording.what, wording.usual, place)}</p>
           <dl className="tiles">
             <div>
-              <dt>{partial ? `First ${partial} days` : 'This month'}</dt>
+              <dt>{partial ? t.verdict.firstDays(partial) : t.verdict.thisMonth}</dt>
               <dd>{fmtCount(v.value)}</dd>
-              {hi - lo > 0.5 && <small>likely {fmtCount(lo)}–{fmtCount(hi)}</small>}
+              {hi - lo > 0.5 && <small>{t.verdict.likely(lo, hi)}</small>}
             </div>
             <div>
-              <dt>{partial ? `Usual by day ${partial}` : `Usual ${monthName}`}</dt>
+              <dt>{partial ? t.verdict.usualByDay(partial) : t.verdict.usualMonth(monthName)}</dt>
               <dd>{fmtCount(v.median)}</dd>
-              <small>median, {v.firstYear}–{v.lastYear}</small>
+              <small>{t.verdict.median(v.firstYear, v.lastYear)}</small>
             </div>
             <div>
-              <dt>Rank</dt>
-              <dd>{ordinal(v.rank)}<span className="of"> of {v.nYears}</span></dd>
-              <small>most active first</small>
+              <dt>{t.verdict.rankLabel}</dt>
+              <dd>{t.verdict.rank(v.rank)}<span className="of">{t.verdict.rankOf(v.nYears)}</span></dd>
+              <small>{t.verdict.rankNote}</small>
             </div>
           </dl>
           <p className="verdict-foot">
             <span className="src-dot" data-src={source.key} aria-hidden="true" />
-            Source for this month: {source.text}.
-            {y && (
-              <>
-                {' '}All of {sel.year}: {y.ratio !== null ? `${fmtRatio(y.ratio)} a typical year` : 'no typical year to compare'},
-                {' '}{ordinal(y.rank)} of {y.nYears}.
-              </>
-            )}
+            {t.verdict.source(source.text)}
+            {y && t.verdict.wholeYear(sel.year, y.ratio, y.rank, y.nYears)}
           </p>
         </>
       ) : (
-        <p className="verdict-text">No satellite coverage for this month. The record starts in November 2000.</p>
+        <p className="verdict-text">{t.verdict.noCoverage}</p>
       )}
 
-      <div className="chips" role="group" aria-label="Jump to a month">
-        <button type="button" aria-pressed={is(sc.latestPeak)} onClick={() => onSelect(sc.latestPeak)}>Latest peak season</button>
-        <button type="button" aria-pressed={is(sc.mostActive)} onClick={() => onSelect(sc.mostActive)}>Most active month on record</button>
-        <button type="button" aria-pressed={is(sc.latest)} onClick={() => onSelect(sc.latest)}>Latest month in the data</button>
+      <div className="chips" role="group" aria-label={t.verdict.jumpAria}>
+        <button type="button" aria-pressed={is(sc.latestPeak)} onClick={() => onSelect(sc.latestPeak)}>{t.verdict.latestPeak}</button>
+        <button type="button" aria-pressed={is(sc.mostActive)} onClick={() => onSelect(sc.mostActive)}>{t.verdict.mostActive}</button>
+        <button type="button" aria-pressed={is(sc.latest)} onClick={() => onSelect(sc.latest)}>{t.verdict.latest}</button>
       </div>
-      <p className="note">Data runs through {longDate(cal.nDays - 1)}. One cell-day is a ~1 km grid cell with fire on one day, in VIIRS-equivalent units.</p>
+      <p className="note">{t.verdict.note(t.longDate(cal.nDays - 1))}</p>
     </section>
   );
 }

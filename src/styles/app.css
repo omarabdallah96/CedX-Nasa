@@ -1,4 +1,4 @@
-/* Ember Almanac. Dark by design: the charts are about light on a dark ground. */
+/* Firesight. Dark by design: the charts are about light on a dark ground. */
 :root {
   color-scheme: dark;
   --page: #0e0c0a;
@@ -17,9 +17,10 @@
   --critical: #e66767;
   --serious: #ec835a;
   --warning: #fab219;
-  --display: 'Fraunces Variable', 'Iowan Old Style', Georgia, serif;
-  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* The Latin faces have no Arabic letters, so Arabic text falls through to the Arabic face that follows. */
+  --display: 'Fraunces Variable', 'Amiri', 'Iowan Old Style', Georgia, serif;
+  --sans: 'IBM Plex Sans', 'IBM Plex Sans Arabic', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', 'IBM Plex Sans Arabic', ui-monospace, 'SF Mono', Menlo, monospace;
   --gutter: clamp(16px, 4vw, 48px);
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
@@ -102,12 +103,13 @@ select:focus-visible, input:not([type='checkbox']):focus-visible {
 /* Our own chevron instead of the platform's select arrow. */
 select {
   appearance: none;
-  padding-right: 34px;
+  padding-inline-end: 34px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%23c4b9a8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m1.5 1.5 4.5 4.5 4.5-4.5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
   cursor: pointer;
 }
+[dir='rtl'] select { background-position: left 12px center; }
 input[aria-invalid='true'] { border-color: var(--critical); box-shadow: 0 0 0 3px rgba(230, 103, 103, 0.2); }
 input[type='checkbox'] {
   appearance: none;
@@ -167,16 +169,26 @@ input[type='checkbox']:checked {
 
 /* ---------- Intro: scroll story ---------- */
 .intro { position: relative; z-index: 1; pointer-events: none; }
-.intro .card, .intro .skip { pointer-events: auto; }
+.intro .card, .intro-actions { pointer-events: auto; }
 .veil { position: fixed; inset: 0; z-index: 0; background: var(--page); opacity: 0; pointer-events: none; }
+.intro-actions { position: fixed; top: 16px; inset-inline-end: var(--gutter); z-index: 3; display: flex; gap: 8px; }
 .skip {
-  position: fixed; top: 16px; right: var(--gutter); z-index: 3;
   min-height: 40px; padding: 8px 16px;
   border: 1px solid var(--hairline-strong); border-radius: 999px;
   background: rgba(14, 12, 10, 0.7); backdrop-filter: blur(8px);
   font-size: 14px; font-weight: 500;
 }
 .skip:hover { background: var(--surface-2); }
+.lang-switch {
+  min-height: 40px; padding: 6px 14px;
+  border: 1px solid var(--hairline-strong); border-radius: 999px;
+  background: transparent;
+  font-size: 14px; font-weight: 500; color: var(--ink-2);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.lang-switch:hover { background: var(--surface-2); border-color: var(--ink-3); color: var(--ink); }
+.intro-actions .lang-switch { background: rgba(14, 12, 10, 0.7); backdrop-filter: blur(8px); color: var(--ink); }
+.intro-actions .lang-switch:hover { background: var(--surface-2); }
 .scene { position: relative; z-index: 1; }
 
 .scene-hero { min-height: 100svh; display: flex; align-items: center; padding: 96px var(--gutter); }
@@ -187,7 +199,7 @@ input[type='checkbox']:checked {
   letter-spacing: -0.035em;
 }
 /* Each word clips its letters so they can rise into view. */
-.hero-word { display: inline-flex; overflow: hidden; padding: 0.06em 0.04em 0.1em 0; }
+.hero-word { display: inline-flex; overflow: hidden; padding: 0.06em 0.04em 0.1em 0; direction: ltr; }
 .hero-char { display: inline-block; will-change: transform; }
 .hero-q { font: 400 italic clamp(22px, 3.4vw, 40px)/1.15 var(--display); color: var(--accent-ink); }
 .hero-sub { max-width: 44ch; font-size: clamp(16px, 1.6vw, 19px); color: var(--ink-2); }
@@ -196,7 +208,7 @@ input[type='checkbox']:checked {
   font: 500 12px var(--sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
 }
 .scroll-cue::after {
-  content: ''; display: block; width: 1px; height: 44px; margin: 10px 0 0 2px;
+  content: ''; display: block; width: 1px; height: 44px; margin-block: 10px 0; margin-inline: 2px 0;
   background: linear-gradient(var(--ink-3), transparent);
   animation: cue 2.2s var(--ease) infinite;
   transform-origin: top;
@@ -240,7 +252,8 @@ input[type='checkbox']:checked {
 .story-bars[data-show] { opacity: 1; }
 .story-bars .seam-plot { height: 84px; }
 
-.rail { grid-area: rail; position: relative; height: 30px; }
+/* A timeline: it runs left to right in every language, like the charts. */
+.rail { grid-area: rail; position: relative; height: 30px; direction: ltr; }
 .rail-track { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--hairline-strong); border-radius: 2px; overflow: hidden; }
 .rail-fill { position: absolute; inset: 0; background: linear-gradient(90deg, #ab3f0d, #f7a846); transform: scaleX(0); transform-origin: left; }
 .rail-mark { position: absolute; top: 0; padding-top: 10px; font: 500 11px var(--mono); color: var(--ink-3); white-space: nowrap; }
@@ -263,7 +276,7 @@ input[type='checkbox']:checked {
 .places { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .places button {
   width: 100%; min-height: 96px; padding: 14px 16px;
-  display: grid; gap: 2px; text-align: left;
+  display: grid; gap: 2px; text-align: start;
   border: 1px solid var(--hairline-strong); border-radius: 14px;
   background: var(--surface-1);
   transition: border-color 0.15s, background 0.15s, transform 0.15s var(--ease);
@@ -273,14 +286,14 @@ input[type='checkbox']:checked {
 .places span { font-size: 13px; color: var(--ink-3); }
 
 .seam-bars { display: grid; gap: 6px; }
-.seam-plot { height: 150px; display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid var(--hairline-strong); }
+.seam-plot { height: 150px; display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid var(--hairline-strong); direction: ltr; }
 .seam-col { flex: 1; height: 100%; display: flex; align-items: flex-end; position: relative; }
 .seam-col i { width: 100%; border-radius: 3px 3px 0 0; transition: height 0.8s var(--ease), background 0.5s; }
 .seam-first::before {
   content: ''; position: absolute; left: -1.5px; top: 0; bottom: 0;
   border-left: 1px dashed var(--ink-3);
 }
-.seam-axis { display: flex; justify-content: space-between; font: 500 11px var(--mono); color: var(--ink-3); }
+.seam-axis { display: flex; justify-content: space-between; font: 500 11px var(--mono); color: var(--ink-3); direction: ltr; }
 .seam-mark { color: var(--ink-2); }
 
 /* ---------- Tool layout ---------- */
@@ -300,7 +313,7 @@ input[type='checkbox']:checked {
   border-bottom: 1px solid var(--hairline);
 }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font: 500 20px var(--display); letter-spacing: -0.01em; }
-.places-nav { display: flex; flex-wrap: wrap; gap: 4px; margin-right: auto; }
+.places-nav { display: flex; flex-wrap: wrap; gap: 4px; margin-inline-end: auto; }
 .places-nav button {
   min-height: 40px; padding: 6px 14px;
   border: 1px solid transparent; border-radius: 999px; background: transparent;
@@ -332,12 +345,12 @@ input[type='checkbox']:checked {
 .verdict-badge[data-level='above'] { color: var(--warning); }
 .verdict-text { max-width: 52ch; font-size: 17px; color: var(--ink-2); }
 .verdict-foot { font-size: 13px; color: var(--ink-3); }
-.src-dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--viirs); }
+.src-dot { display: inline-block; width: 8px; height: 8px; margin-inline-end: 6px; border-radius: 50%; background: var(--viirs); }
 .src-dot[data-src='modis'] { background: var(--modis); }
 
 .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border-block: 1px solid var(--hairline); }
-.tiles > div { padding: 12px 14px 12px 0; display: grid; gap: 2px; align-content: start; }
-.tiles > div + div { padding-left: 14px; border-left: 1px solid var(--hairline); }
+.tiles > div { padding-block: 12px; padding-inline: 0 14px; display: grid; gap: 2px; align-content: start; }
+.tiles > div + div { padding-inline-start: 14px; border-inline-start: 1px solid var(--hairline); }
 .tiles dt { font-size: 12px; color: var(--ink-3); }
 .tiles dd { font: 500 clamp(22px, 2.6vw, 30px)/1.1 var(--sans); letter-spacing: -0.01em; }
 .tiles .of { font-size: 0.55em; font-weight: 400; color: var(--ink-3); }
@@ -366,10 +379,10 @@ input[type='checkbox']:checked {
 .filters label { display: flex; gap: 10px; font-size: 14px; color: var(--ink-2); }
 .filters small { color: var(--ink-3); }
 .map-key { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--ink-3); }
-.pt { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 50%; border: 1.5px solid; vertical-align: -1px; }
+.pt { display: inline-block; width: 9px; height: 9px; margin-inline-end: 5px; border-radius: 50%; border: 1.5px solid; vertical-align: -1px; }
 .pt-viirs { background: #fff0c2; border-color: var(--viirs); }
 .pt-modis { background: #9cc4f5; border-color: var(--modis); }
-.glow { display: inline-block; width: 12px; height: 12px; margin-right: 5px; border-radius: 50%; background: radial-gradient(#ea7f24, transparent 70%); vertical-align: -2px; }
+.glow { display: inline-block; width: 12px; height: 12px; margin-inline-end: 5px; border-radius: 50%; background: radial-gradient(#ea7f24, transparent 70%); vertical-align: -2px; }
 
 /* ---------- Main sections ---------- */
 .main { grid-area: main; display: grid; gap: clamp(48px, 7vw, 88px); padding-top: 24px; transition: opacity 0.2s; }
@@ -400,8 +413,10 @@ input[type='checkbox']:checked {
 .calendar { position: relative; container-type: inline-size; min-width: 0; }
 .calendar table { width: 100%; border-collapse: separate; border-spacing: 2px; table-layout: fixed; }
 .calendar th { font: 500 11px var(--sans); color: var(--ink-3); text-align: center; padding: 0 0 4px; }
-.calendar th.cal-year { width: 38px; text-align: left; font-family: var(--mono); padding: 0; }
-.calendar .cal-total { width: 21%; text-align: left; padding-left: 6px; }
+.calendar th.cal-year { width: 38px; text-align: start; font-family: var(--mono); padding: 0; }
+.calendar .cal-total { width: 21%; text-align: start; padding-inline-start: 6px; }
+/* Month numbers stand in for names where the names would not fit their column. */
+.cal-month-n { display: none; }
 .calendar td { padding: 0; height: 20px; }
 .cal-none { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--hairline) 3px 4px); border-radius: 3px; }
 .cal-cell {
@@ -415,8 +430,8 @@ input[type='checkbox']:checked {
 .cal-seam > * { border-bottom: 1px dashed var(--ink-3); padding-bottom: 3px !important; }
 .cal-seam > td { height: 24px; }
 td.cal-total { position: relative; white-space: nowrap; }
-.cal-bar { display: inline-block; height: 12px; min-width: 2px; max-width: calc(100% - 44px); border-radius: 0 3px 3px 0; vertical-align: middle; transition: width 0.7s var(--ease), background 0.5s; }
-.cal-total-n { margin-left: 6px; font: 500 10.5px var(--mono); color: var(--ink-2); vertical-align: middle; }
+.cal-bar { display: inline-block; height: 12px; min-width: 2px; max-width: calc(100% - 44px); border-start-end-radius: 3px; border-end-end-radius: 3px; vertical-align: middle; transition: width 0.7s var(--ease), background 0.5s; }
+.cal-total-n { margin-inline-start: 6px; font: 500 10.5px var(--mono); color: var(--ink-2); vertical-align: middle; }
 .cal-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; font-size: 12px; color: var(--ink-3); }
 .ramp {
   order: 1; width: 140px; height: 10px; border-radius: 3px;
@@ -424,13 +439,19 @@ td.cal-total { position: relative; white-space: nowrap; }
 }
 .cal-legend > span:nth-child(2) { order: 0; }
 .ramp-max { order: 2; }
-.cal-keys { order: 3; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
-.cal-keys i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-left: 8px; }
+.cal-keys { order: 3; margin-inline-start: auto; display: inline-flex; align-items: center; gap: 6px; }
+.cal-keys i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-inline-start: 8px; }
+/* The ramp starts beside the 0 on either side. */
+[dir='rtl'] .ramp { transform: scaleX(-1); }
 @container (max-width: 470px) { .cal-cell span { display: none; } }
 
 /* ---------- Charts ---------- */
 .chart-wrap { position: relative; min-width: 0; }
-.chart-wrap svg { display: block; max-width: 100%; touch-action: pan-y; }
+/* Charts keep their left-to-right axes in every language; only their wording changes. */
+.chart-wrap svg { display: block; max-width: 100%; touch-action: pan-y; direction: ltr; }
+/* The box is exactly as wide as the chart, so tooltips placed from its left edge stay on the marks. */
+.chart-box { position: relative; max-width: 100%; }
+[dir='rtl'] .chart-wrap svg .tick-label { direction: rtl; }
 .grid { stroke: var(--hairline); stroke-width: 1; }
 .axis { stroke: var(--hairline-strong); stroke-width: 1; }
 .tick { font: 400 11px var(--sans); fill: var(--ink-3); font-variant-numeric: tabular-nums; }
@@ -460,16 +481,16 @@ td.cal-total { position: relative; white-space: nowrap; }
 .trust-fig figcaption { font-size: 14px; color: var(--ink-2); max-width: 52ch; }
 .trust-text { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(20px, 4vw, 48px); }
 .trust-text ol { counter-reset: step; display: grid; gap: 12px; }
-.trust-text ol li { counter-increment: step; position: relative; padding-left: 34px; color: var(--ink-2); font-size: 15px; }
+.trust-text ol li { counter-increment: step; position: relative; padding-inline-start: 34px; color: var(--ink-2); font-size: 15px; }
 .trust-text ol li::before {
-  content: counter(step); position: absolute; left: 0; top: 1px;
+  content: counter(step); position: absolute; inset-inline-start: 0; top: 1px;
   width: 22px; height: 22px; border-radius: 50%;
   border: 1px solid var(--hairline-strong);
   font: 500 12px/20px var(--mono); text-align: center; color: var(--ink-2);
 }
 .trust-text ul { display: grid; gap: 10px; }
-.trust-text ul li { position: relative; padding-left: 18px; color: var(--ink-2); font-size: 15px; }
-.trust-text ul li::before { content: ''; position: absolute; left: 2px; top: 0.7em; width: 6px; height: 1px; background: var(--ink-3); }
+.trust-text ul li { position: relative; padding-inline-start: 18px; color: var(--ink-2); font-size: 15px; }
+.trust-text ul li::before { content: ''; position: absolute; inset-inline-start: 2px; top: 0.7em; width: 6px; height: 1px; background: var(--ink-3); }
 
 .export { display: grid; gap: 10px; }
 .export-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -483,7 +504,7 @@ td.cal-total { position: relative; white-space: nowrap; }
   .map[data-phase='tool'] { min-height: 0; height: 52vh; max-height: 440px; }
   .record-grid, .trust-figs, .trust-text { grid-template-columns: minmax(0, 1fr); }
   .tiles-wide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .tiles-wide > div:nth-child(3) { padding-left: 0; border-left: 0; }
+  .tiles-wide > div:nth-child(3) { padding-inline-start: 0; border-inline-start: 0; }
   .tiles-wide > div:nth-child(n + 3) { border-top: 1px solid var(--hairline); }
   .stage {
     grid-template-columns: minmax(0, 1fr);
@@ -502,6 +523,9 @@ td.cal-total { position: relative; white-space: nowrap; }
   .area-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .area-inputs .btn { grid-column: 1 / -1; }
   .head-link { display: none; }
+  /* The language switch shares the first row with the name; the places take the second. */
+  .brand { margin-inline-end: auto; }
+  .places-nav { order: 1; width: 100%; }
   .calendar .cal-total { width: 17%; }
   .cal-total-n { display: none; }
   .cal-bar { max-width: 100%; }
@@ -516,7 +540,7 @@ td.cal-total { position: relative; white-space: nowrap; }
 .now { display: grid; gap: 8px; padding-top: 18px; border-top: 1px solid var(--hairline); justify-items: start; }
 .now-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; width: 100%; }
 .now h2 { font: 600 14px var(--sans); }
-.now h2 small { margin-left: 6px; font: 400 13px var(--mono); color: var(--ink-3); }
+.now h2 small { margin-inline-start: 6px; font: 400 13px var(--mono); color: var(--ink-3); }
 .now-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); }
 .now-live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
 .now-live[data-live] { color: var(--ink-2); }
@@ -527,7 +551,7 @@ td.cal-total { position: relative; white-space: nowrap; }
 .now .btn { min-height: 36px; padding: 6px 14px; font-size: 13px; }
 
 .period { display: grid; gap: 10px; margin: 6px 0 0; padding: 14px 0 0; border: 0; border-top: 1px solid var(--hairline); min-width: 0; }
-.period legend { float: left; width: 100%; padding: 0; font: 600 14px var(--sans); }
+.period legend { float: inline-start; width: 100%; padding: 0; font: 600 14px var(--sans); }
 .period-inputs { clear: both; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .period-inputs label { display: grid; gap: 4px; font-size: 12px; font-weight: 500; color: var(--ink-2); }
 .period-inputs input { width: 100%; min-width: 0; font: 400 15px var(--mono); font-variant-numeric: tabular-nums; }
@@ -541,15 +565,15 @@ td.cal-total { position: relative; white-space: nowrap; }
   display: grid; grid-template-columns: 18px minmax(0, 1.25fr) minmax(40px, 1fr) auto; align-items: center; gap: 10px;
   width: 100%; min-height: 40px; padding: 4px 8px;
   border: 1px solid transparent; border-radius: 8px; background: transparent;
-  text-align: left; font-size: 14px; color: var(--ink-2);
+  text-align: start; font-size: 14px; color: var(--ink-2);
 }
 .records button:hover { background: var(--surface-1); color: var(--ink); }
 .records button[aria-pressed='true'] { border-color: var(--hairline-strong); background: var(--surface-2); color: var(--ink); }
 .rec-rank { font: 500 12px var(--mono); color: var(--ink-3); }
 .rec-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rec-name small { margin-left: 4px; font-size: 12px; color: var(--ink-3); }
+.rec-name small { margin-inline-start: 4px; font-size: 12px; color: var(--ink-3); }
 .rec-bar { height: 10px; }
-.rec-bar i { display: block; height: 100%; min-width: 2px; border-radius: 0 3px 3px 0; background: var(--harmonized); }
+.rec-bar i { display: block; height: 100%; min-width: 2px; border-start-end-radius: 3px; border-end-end-radius: 3px; background: var(--harmonized); }
 .rec-value { font: 500 13px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
 
 .cal-cell[data-partial] { box-shadow: inset 0 0 0 1px var(--page), inset 0 0 0 2px rgba(243, 237, 228, 0.55); }
@@ -566,4 +590,28 @@ td.cal-total { position: relative; white-space: nowrap; }
 @media (max-width: 520px) {
   .downloads li { grid-template-columns: minmax(0, 1fr); }
   .rec-name small { display: none; }
+}
+
+/* ---------- Arabic ---------- */
+/* Layout mirrors through the logical properties above; these rules are what the script itself needs. */
+/* Arabic letters join, so tracking would pull words apart. */
+:lang(ar) { letter-spacing: 0 !important; }
+/* Taller letterforms and marks above and below the line need more leading than Latin. */
+body:lang(ar) { line-height: 1.7; }
+.eyebrow:lang(ar) { font-size: 13px; line-height: 1.5; }
+.note:lang(ar), .period-sum:lang(ar), .verdict-foot:lang(ar) { line-height: 1.7; }
+.verdict-answer:lang(ar), .captions h2:lang(ar), .card h2:lang(ar), .main h2:lang(ar) { line-height: 1.35; }
+.places strong:lang(ar) { line-height: 1.5; }
+/* There is no Arabic italic: a slanted naskh only looks broken. */
+.hero-q:lang(ar) { font-style: normal; line-height: 1.5; }
+.hero-sub:lang(ar), .captions p:not(.eyebrow):lang(ar) { line-height: 1.8; }
+.tip:lang(ar) { line-height: 1.6; }
+/* Arabic words set in the monospace face would be spaced by its wide blank. */
+.ticker:lang(ar), .now h2 small:lang(ar), .seam-axis:lang(ar), .rail-mark:lang(ar) { font-family: var(--sans); font-variant-numeric: tabular-nums; }
+/* Coordinates are typed left to right in any language. */
+[dir='rtl'] .area-inputs input { direction: ltr; text-align: right; }
+.calendar th:lang(ar) { font-size: 10.5px; }
+@container (max-width: 560px) {
+  .cal-month:lang(ar) { display: none; }
+  .cal-month-n:lang(ar) { display: inline; }
 }

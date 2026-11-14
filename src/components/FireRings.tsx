@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { useI18n } from '../i18n/index.tsx';
 import { rampPosition } from '../lib/color.ts';
 import { dayAt, drawRings, ringsGeometry } from '../lib/rings.ts';
 import { FIRST_DAY, type Calendar } from '../lib/time.ts';
@@ -32,6 +33,8 @@ export interface FireRingsHandle {
 
 export const FireRings = forwardRef<FireRingsHandle, Props>(function FireRings(props, ref) {
   const { daily, cal, max, sel, onSelect, title, describe, seamYear } = props;
+  const { t: words } = useI18n();
+  const months = words.months;
   const wrap = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { width } = useSize(wrap);
@@ -41,16 +44,20 @@ export const FireRings = forwardRef<FireRingsHandle, Props>(function FireRings(p
   const shown = useRef<Float32Array | null>(null);
   const describeRef = useRef(describe);
   describeRef.current = describe;
-  // Fonts load after first paint; redraw once they are ready so labels use them.
-  const [fontsReady, setFontsReady] = useState(false);
+  // Fonts load after first paint, and again when the language brings in another
+  // script; redraw each time a batch is ready so labels use them.
+  const [fontsReady, setFontsReady] = useState(0);
 
   useImperativeHandle(ref, () => ({ canvas: () => canvasRef.current }), []);
 
   useEffect(() => {
     let alive = true;
-    document.fonts?.ready.then(() => alive && setFontsReady(true));
+    const bump = () => alive && setFontsReady((n) => n + 1);
+    document.fonts?.ready.then(bump);
+    document.fonts?.addEventListener('loadingdone', bump);
     return () => {
       alive = false;
+      document.fonts?.removeEventListener('loadingdone', bump);
     };
   }, []);
 
@@ -69,7 +76,7 @@ export const FireRings = forwardRef<FireRingsHandle, Props>(function FireRings(p
     for (let d = FIRST_DAY; d < cal.nDays; d++) target[d] = rampPosition(daily[d], max);
     const from = shown.current && shown.current.length === target.length ? shown.current : null;
     const draw = (t: Float32Array) =>
-      drawRings(ctx, { size, dpr, cal, t, sel, title, subtitle: `${g.firstYear}–${g.lastYear}`, seamYear });
+      drawRings(ctx, { size, dpr, cal, t, sel, title, subtitle: `${g.firstYear}–${g.lastYear}`, seamYear, months });
 
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!from || reduce) {
@@ -97,7 +104,7 @@ export const FireRings = forwardRef<FireRingsHandle, Props>(function FireRings(p
     };
     // sel is split into primitives; g is derived from size and cal
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [daily, cal, max, size, sel.year, sel.month, title, seamYear, fontsReady]);
+  }, [daily, cal, max, size, sel.year, sel.month, title, seamYear, fontsReady, months]);
 
   const locate = (e: React.PointerEvent | React.MouseEvent): number | null => {
     const rect = canvasRef.current!.getBoundingClientRect();
@@ -110,7 +117,7 @@ export const FireRings = forwardRef<FireRingsHandle, Props>(function FireRings(p
         ref={canvasRef}
         style={{ width: size, height: size }}
         role="img"
-        aria-label={`Fire rings for ${title}: one ring per year from ${g.firstYear} at the centre to ${g.lastYear} at the edge, one step per day clockwise from 1 January at the top. The same numbers are in the burning calendar table.`}
+        aria-label={words.rings.aria(title, g.firstYear, g.lastYear)}
         onPointerMove={(e) => {
           const day = locate(e);
           if (day === null) return setTip(null);

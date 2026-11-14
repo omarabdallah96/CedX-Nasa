@@ -61,7 +61,14 @@ export interface DrawRingsOptions {
   seamPhase?: number;
   /** Fill the core with the title (the intro shows the running year there). */
   bigTitle?: boolean;
+  /** Twelve short month names for the rim; English when omitted. */
+  months?: string[];
 }
+
+// Arabic falls through to the Arabic faces; Latin text and digits keep the first one.
+const SANS = '"IBM Plex Sans", "IBM Plex Sans Arabic", system-ui, sans-serif';
+const MONO = '"IBM Plex Mono", "IBM Plex Sans Arabic", ui-monospace, monospace';
+const DISPLAY = '"Fraunces Variable", "Amiri", Georgia, serif';
 
 export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): void {
   const { size, dpr, cal, t, sel } = o;
@@ -134,16 +141,20 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
 
   // Month labels.
   ctx.fillStyle = '#8c8274';
-  ctx.font = `500 ${size < 360 ? 9 : 11}px "IBM Plex Sans", system-ui, sans-serif`;
+  ctx.font = `500 ${size < 360 ? 9 : 11}px ${SANS}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  const months = o.months ?? MONTHS;
   for (let m = 0; m < 12; m++) {
     const a = TOP + (TAU * (m + 0.5)) / 12;
-    ctx.fillText(MONTHS[m], c + (R + pad / 2 + 1) * Math.cos(a), c + (R + pad / 2 + 1) * Math.sin(a));
+    // Longer names (Arabic) are nudged inward rather than cut by the canvas edge.
+    const half = ctx.measureText(months[m]).width / 2 + 1;
+    const x = Math.min(size - half, Math.max(half, c + (R + pad / 2 + 1) * Math.cos(a)));
+    ctx.fillText(months[m], x, c + (R + pad / 2 + 1) * Math.sin(a));
   }
 
   // Year labels along the 1 January spoke.
-  ctx.font = `500 ${size < 360 ? 8 : 9.5}px "IBM Plex Mono", ui-monospace, monospace`;
+  ctx.font = `500 ${size < 360 ? 8 : 9.5}px ${MONO}`;
   ctx.textAlign = 'left';
   for (let y = firstYear; y <= lastShown; y += 5) {
     const label = String(y);
@@ -174,9 +185,9 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
   ctx.textAlign = 'center';
   ctx.fillStyle = '#f3ede4';
   const titleSize = o.bigTitle ? r0 * 0.66 : Math.max(11, r0 * 0.3);
-  ctx.font = `500 ${titleSize}px "Fraunces Variable", Georgia, serif`;
+  ctx.font = `500 ${titleSize}px ${DISPLAY}`;
   ctx.fillText(o.title, c, c - r0 * (o.bigTitle ? 0.1 : 0.14), r0 * 1.7);
   ctx.fillStyle = '#8c8274';
-  ctx.font = `500 ${Math.max(8, r0 * 0.19)}px "IBM Plex Mono", ui-monospace, monospace`;
+  ctx.font = `500 ${Math.max(8, r0 * 0.19)}px ${MONO}`;
   ctx.fillText(o.subtitle, c, c + r0 * (o.bigTitle ? 0.46 : 0.28), r0 * 1.7);
 }

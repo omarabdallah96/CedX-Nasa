@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
 import { scaleLinear } from 'd3-scale';
 import { area, line, curveMonotoneX } from 'd3-shape';
+import { useI18n } from '../i18n/index.tsx';
 import { fmtCount } from '../lib/format.ts';
 import { PENTADS, type PeakSeason, type SeasonProfile } from '../lib/stats.ts';
-import { dayIndex, MONTHS, MONTHS_LONG } from '../lib/time.ts';
+import { dayIndex } from '../lib/time.ts';
 import { useSize } from './useSize.ts';
 
 interface Props {
@@ -13,16 +14,15 @@ interface Props {
   peak: PeakSeason | null;
 }
 
-const MONTH_START = MONTHS.map((_, m) => dayIndex(2001, m + 1, 1) - dayIndex(2001, 1, 1));
+const MONTH_START = Array.from({ length: 12 }, (_, m) => dayIndex(2001, m + 1, 1) - dayIndex(2001, 1, 1));
 
-function pentadLabel(b: number): string {
-  const d0 = new Date(Date.UTC(2001, 0, 1 + b * 5));
-  const d1 = new Date(Date.UTC(2001, 0, 1 + Math.min(364, b * 5 + 4)));
-  const f = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
-  return `${f(d0)} – ${f(d1)}`;
+/** First and last day of the b-th five-day bin of a year. */
+function pentadDays(b: number): [Date, Date] {
+  return [new Date(Date.UTC(2001, 0, 1 + b * 5)), new Date(Date.UTC(2001, 0, 1 + Math.min(364, b * 5 + 4)))];
 }
 
 export function SeasonChart({ season, year, baseline, peak }: Props) {
+  const { t } = useI18n();
   const wrap = useRef<HTMLDivElement>(null);
   const { width } = useSize(wrap);
   const [hover, setHover] = useState<number | null>(null);
@@ -38,31 +38,33 @@ export function SeasonChart({ season, year, baseline, peak }: Props) {
   const medianPath = line<number>().x((i) => x(i)).y((i) => y(season.median[i])).curve(curveMonotoneX)(idx)!;
   const yearPath = line<number>().x((i) => x(i)).y((i) => y(mine[i])).curve(curveMonotoneX)(idx)!;
 
-  const peakText = peak
-    ? peak.length === 1
-      ? `${MONTHS_LONG[peak.start]} alone`
-      : `${MONTHS_LONG[peak.start]} to ${MONTHS_LONG[(peak.start + peak.length - 1) % 12]}`
-    : null;
+  // Arabic month names are wider than "Jan": switch to month numbers sooner.
+  const narrow = W < (t.lang === 'ar' ? 600 : 520);
+  const pentadLabel = (b: number) =>
+    pentadDays(b).map((d) => t.dayMonth(d.getUTCDate(), d.getUTCMonth())).join(' – ');
 
   return (
     <div className="season">
-      {peak && peakText && (
+      {peak && (
         <p className="lede">
-          Critical period: <strong>{peakText}</strong> {peak.length === 1 ? 'carries' : 'carry'}{' '}
-          <strong>{Math.round(peak.share * 100)}%</strong> of a typical year's burning here.
+          {t.season.lede(
+            t.monthsLong[peak.start],
+            peak.length === 1 ? null : t.monthsLong[(peak.start + peak.length - 1) % 12],
+            peak.share,
+          )}
         </p>
       )}
-      <ul className="legend" aria-label="Legend">
+      <ul className="legend" aria-label={t.season.legendAria}>
         <li><i className="key-line key-year" /> {year}</li>
-        <li><i className="key-line key-median" /> Median, {baseline[0]}–{baseline[1]}</li>
-        <li><i className="key-band" /> Usual range (10th–90th percentile)</li>
+        <li><i className="key-line key-median" /> {t.season.median(baseline[0], baseline[1])}</li>
+        <li><i className="key-band" /> {t.season.usualRange}</li>
       </ul>
       <div ref={wrap} className="chart-wrap">
         <svg
           width={W}
           height={H}
           role="img"
-          aria-label={`Season profile: harmonized cell-days per five days through the year, ${year} against the ${baseline[0]}–${baseline[1]} median and usual range.`}
+          aria-label={t.season.aria(year, baseline[0], baseline[1])}
           onPointerMove={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
             const b = Math.round(x.invert(e.clientX - rect.left));
@@ -70,15 +72,15 @@ export function SeasonChart({ season, year, baseline, peak }: Props) {
           }}
           onPointerLeave={() => setHover(null)}
         >
-          {y.ticks(4).map((t) => (
-            <g key={t}>
-              <line className="grid" x1={m.left} x2={W - m.right} y1={y(t)} y2={y(t)} />
-              <text className="tick" x={m.left - 8} y={y(t)} dy="0.32em" textAnchor="end">{fmtCount(t)}</text>
+          {y.ticks(4).map((tick) => (
+            <g key={tick}>
+              <line className="grid" x1={m.left} x2={W - m.right} y1={y(tick)} y2={y(tick)} />
+              <text className="tick" x={m.left - 8} y={y(tick)} dy="0.32em" textAnchor="end">{fmtCount(tick)}</text>
             </g>
           ))}
           {MONTH_START.map((d, i) => (
             <text key={i} className="tick" x={x((d + 15) / 5)} y={H - 8} textAnchor="middle">
-              {W < 520 ? MONTHS[i][0] : MONTHS[i]}
+              {narrow ? t.monthsNarrow[i] : t.months[i]}
             </text>
           ))}
           <line className="axis" x1={m.left} x2={W - m.right} y1={y(0)} y2={y(0)} />
@@ -96,13 +98,13 @@ export function SeasonChart({ season, year, baseline, peak }: Props) {
         {hover !== null && (
           <div className="tip tip-above" style={{ left: Math.min(W - 90, Math.max(90, x(hover))), top: m.top + 4 }} role="status">
             <strong>{pentadLabel(hover)}</strong>
-            <span>{year}: {fmtCount(mine[hover])} cell-days</span>
-            <span>Median: {fmtCount(season.median[hover])}</span>
-            <span>Usual range: {fmtCount(season.p10[hover])}–{fmtCount(season.p90[hover])}</span>
+            <span>{t.season.tipYear(year, mine[hover])}</span>
+            <span>{t.season.tipMedian(season.median[hover])}</span>
+            <span>{t.season.tipRange(season.p10[hover], season.p90[hover])}</span>
           </div>
         )}
       </div>
-      <p className="axis-note">Harmonized active-fire cell-days per five days</p>
+      <p className="axis-note">{t.season.axisNote}</p>
     </div>
   );
 }

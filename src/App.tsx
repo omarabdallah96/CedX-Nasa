@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { lastWeek, rangeSummary, selectionVerdict, type DatasetIndex } from './lib/analysis.ts';
 import { AnalysisClient, pickDataSource, type DataSource } from './lib/client.ts';
-import { EDGES, parseBox } from './lib/coords.ts';
-import { fmtCount } from './lib/format.ts';
+import { parseBox, type BoxFailure } from './lib/coords.ts';
 import { SRC_GAPFILL, SRC_MODIS, SRC_N20, SRC_TERRA, type BBox, type Filters } from './lib/harmonize.ts';
-import { ANSWER, monthWording, verdictSentence } from './lib/sentence.ts';
 import { completeYears, seamStep } from './lib/stats.ts';
-import { buildCalendar, FIRST_DAY, isoDate, longDate, MONTHS, rangeName, SEAM_DAY } from './lib/time.ts';
+import { buildCalendar, FIRST_DAY, isoDate, SEAM_DAY } from './lib/time.ts';
 import type { CountrySummary, GlobeView, IntroStory, SeamMode } from './lib/types.ts';
 import type { AnalyzeResult, PointsResult } from './worker/analysis.worker.ts';
 import { BurnCalendar } from './components/BurnCalendar.tsx';
@@ -20,6 +18,7 @@ import { Records } from './components/Records.tsx';
 import { SeasonChart } from './components/SeasonChart.tsx';
 import { TrustPanel } from './components/TrustPanel.tsx';
 import { shortcuts, Verdict } from './components/Verdict.tsx';
+import { LangSwitch, useI18n } from './i18n/index.tsx';
 
 const SEAM_YEAR = 2012;
 
@@ -36,6 +35,7 @@ function robustMax(values: Float32Array, q: number): number {
 }
 
 export function App() {
+  const { t } = useI18n();
   const client = useMemo(() => new AnalysisClient(), []);
   const [source, setSource] = useState<DataSource | null>(null);
   const [index, setIndex] = useState<DatasetIndex | null>(null);
@@ -50,7 +50,7 @@ export function App() {
   const [bbox, setBBox] = useState<BBox | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [boxText, setBoxText] = useState(['', '', '', '']);
-  const [boxError, setBoxError] = useState<{ message: string; fields: number[] } | null>(null);
+  const [boxError, setBoxError] = useState<BoxFailure | null>(null);
   const [result, setResult] = useState<{ key: string; data: AnalyzeResult } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -106,7 +106,8 @@ export function App() {
   }, [phase, slug]);
 
   const country = index?.countries.find((c) => c.slug === slug) ?? null;
-  const place = country ? (bbox ? `the selected area of ${country.name}` : country.name) : '';
+  const countryName = country ? t.country(country.slug, country.name) : null;
+  const place = countryName ? t.place(countryName, !!bbox) : '';
   const filters: Filters = useMemo(() => ({ ...flags, bbox }), [flags, bbox]);
   const key = `${slug}|${flags.vegOnly}|${flags.dropLowConf}|${bbox?.join(',') ?? 'all'}`;
 
@@ -189,7 +190,7 @@ export function App() {
     if (!country || !boxEdited) return;
     const r = parseBox(boxText, country);
     if (r.ok) applyBox(r.bbox);
-    else setBoxError({ message: r.message, fields: r.fields });
+    else setBoxError(r);
   };
 
   const series = analysis ? (mode === 'harmonized' ? analysis.harmonized.h : analysis.naive) : null;
@@ -202,31 +203,27 @@ export function App() {
   const describeDay = useCallback(
     (day: number) => {
       if (!analysis || !cal) return '';
-      const date = `${Number(isoDate(day).slice(8))} ${MONTHS[cal.month[day]]} ${cal.year[day]}`;
-      if (mode === 'raw') {
-        return `${date}: ${fmtCount(analysis.naive[day])} raw ${day < SEAM_DAY ? 'MODIS' : 'VIIRS'} detections`;
-      }
+      const date = t.record.dayDate(Number(isoDate(day).slice(8)), cal.month[day], cal.year[day]);
+      if (mode === 'raw') return t.record.dayRaw(date, analysis.naive[day], day < SEAM_DAY ? 'MODIS' : 'VIIRS');
       const src = analysis.harmonized.src[day];
-      const how = src === SRC_TERRA || src === SRC_MODIS
-        ? 'scaled from MODIS'
-        : src === SRC_GAPFILL ? 'VIIRS outage, filled from MODIS' : src === SRC_N20 ? 'VIIRS on NOAA-20' : 'VIIRS observed';
-      return `${date}: ${fmtCount(analysis.harmonized.h[day])} cell-days · ${how}`;
+      const how = src === SRC_TERRA || src === SRC_MODIS ? 'modis' : src === SRC_GAPFILL ? 'gap-fill' : src === SRC_N20 ? 'noaa20' : 'viirs';
+      return t.record.dayHarmonized(date, analysis.harmonized.h[day], how);
     },
-    [analysis, cal, mode],
+    [analysis, cal, mode, t],
   );
 
   if (bootError) {
     return (
       <div className="fatal" role="alert">
-        <h1>Ember Almanac</h1>
-        <p>The data files could not be loaded ({bootError}). Run <code>npm run data</code> to build them, then reload.</p>
+        <h1 lang="en">{t.brand}</h1>
+        <p>{t.app.bootError(bootError)}</p>
       </div>
     );
   }
 
   const empty = analysis !== null && analysis.detections.modis + analysis.detections.viirs === 0;
   const pv = analysis && sel && cal ? selectionVerdict(analysis, cal, sel.year, sel.month) : null;
-  const wording = pv && sel ? monthWording(pv, sel.year, sel.month) : null;
+  const wording = pv && sel ? t.monthWording(pv, sel.year, sel.month) : null;
   const baseline = analysis ? completeYears(analysis.monthsH) : [];
   const summaryOfPeriod = analysis && cal && period ? rangeSummary(analysis, cal, period.from, period.to) : null;
   const week = analysis && cal ? lastWeek(analysis, cal) : null;
@@ -251,44 +248,43 @@ export function App() {
       )}
 
       {phase === 'intro' && summary && story && cal && <Intro summary={summary} story={story} cal={cal} onView={setGlobeView} onOpen={open} />}
-      {phase === 'intro' && !(summary && story && cal) && <p className="boot">Loading the almanac…</p>}
+      {phase === 'intro' && !(summary && story && cal) && <p className="boot">{t.app.loading}</p>}
 
       {phase === 'tool' && index && cal && (
         <>
           <header className="head">
             <a className="brand" href="#top" onClick={(e) => { e.preventDefault(); setPhase('intro'); setGlobeView('spin'); }}>
               <img src="./favicon.svg" alt="" width={26} height={26} />
-              <span>Ember Almanac</span>
+              <span lang="en">{t.brand}</span>
             </a>
-            <nav className="places-nav" aria-label="Place">
+            <nav className="places-nav" aria-label={t.app.placeNav}>
               {index.countries.map((c) => (
-                <button key={c.slug} type="button" aria-pressed={c.slug === slug} onClick={() => open(c.slug)}>{c.name}</button>
+                <button key={c.slug} type="button" aria-pressed={c.slug === slug} onClick={() => open(c.slug)}>{t.country(c.slug, c.name)}</button>
               ))}
             </nav>
-            <a className="head-link" href="#trust">How it works</a>
+            <a className="head-link" href="#trust">{t.app.howItWorks}</a>
+            <LangSwitch />
           </header>
 
           <aside className="side" aria-busy={!analysis || stale}>
             {error ? (
               <div className="verdict" role="alert">
-                <p className="eyebrow">Something went wrong</p>
+                <p className="eyebrow">{t.app.wrong}</p>
                 <p className="verdict-text">{error}</p>
-                <button type="button" className="btn" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+                <button type="button" className="btn" onClick={() => setAttempt((n) => n + 1)}>{t.app.retry}</button>
               </div>
             ) : analysis && empty ? (
               <div className="verdict">
                 <p className="eyebrow">{place}</p>
-                <h2 className="verdict-answer">Nothing to judge.</h2>
-                <p className="verdict-text">
-                  No fire was detected inside this box in the whole record, so there is no normal to compare with. Draw a larger box or go back to the whole country.
-                </p>
+                <h2 className="verdict-answer">{t.app.nothing}</h2>
+                <p className="verdict-text">{t.app.nothingText}</p>
               </div>
             ) : analysis && sel ? (
               <Verdict analysis={analysis} cal={cal} sel={sel} onSelect={select} place={place} />
             ) : (
               <div className="verdict">
-                <p className="eyebrow">{country?.name}</p>
-                <p className="verdict-text">Reading {country ? country.n.toLocaleString('en-US') : ''} satellite detections…</p>
+                <p className="eyebrow">{countryName}</p>
+                <p className="verdict-text">{t.app.reading(country ? country.n : null)}</p>
               </div>
             )}
 
@@ -304,21 +300,19 @@ export function App() {
             )}
 
             <form className="area" onSubmit={submitBox} aria-labelledby="area-h">
-              <h2 id="area-h">Area</h2>
-              <p className="note">
-                {bbox ? 'Showing a drawn area. Its conversion factor is fitted locally.' : `Showing all of ${country?.name ?? 'the country'}.`}
-              </p>
+              <h2 id="area-h">{t.area.title}</h2>
+              <p className="note">{bbox ? t.area.showingDrawn : t.area.showingAll(countryName)}</p>
               <div className="area-actions">
                 <button type="button" className="btn" aria-pressed={drawing} onClick={() => setDrawing((d) => !d)}>
-                  {drawing ? 'Cancel drawing' : 'Draw a box on the map'}
+                  {drawing ? t.area.cancelDraw : t.area.draw}
                 </button>
-                {bbox && <button type="button" className="btn btn-quiet" onClick={() => applyBox(null)}>Whole country</button>}
+                {bbox && <button type="button" className="btn btn-quiet" onClick={() => applyBox(null)}>{t.area.whole}</button>}
               </div>
-              {drawing && <p className="note" role="status">Drag on the map from one corner to the opposite corner.</p>}
+              {drawing && <p className="note" role="status">{t.area.drawHint}</p>}
               <div className="area-inputs">
-                {EDGES.map((label, i) => (
-                  <label key={label}>
-                    <span>{label} <small>{i % 2 === 0 ? 'lon' : 'lat'}</small></span>
+                {t.area.edges.map((label, i) => (
+                  <label key={i}>
+                    <span>{label} <small>{i % 2 === 0 ? t.area.lon : t.area.lat}</small></span>
                     <input
                       type="text"
                       autoComplete="off"
@@ -335,21 +329,21 @@ export function App() {
                     />
                   </label>
                 ))}
-                <button type="submit" className="btn btn-quiet" disabled={!boxEdited}>Apply</button>
+                <button type="submit" className="btn btn-quiet" disabled={!boxEdited}>{t.area.apply}</button>
               </div>
-              {boxError ? (
-                <p id="box-error" className="form-error" role="alert">{boxError.message}</p>
+              {boxError && country ? (
+                <p id="box-error" className="form-error" role="alert">{t.area.boxError(boxError, countryName ?? country.name, country.bbox)}</p>
               ) : (
-                <p id="box-hint" className="note">Edit any edge in decimal degrees (-8.6 or 8.6 W), then Apply.</p>
+                <p id="box-hint" className="note">{t.area.hint}</p>
               )}
               <div className="filters">
                 <label>
                   <input type="checkbox" checked={flags.vegOnly} onChange={(e) => setFlags((f) => ({ ...f, vegOnly: e.target.checked }))} />
-                  Vegetation fires only <small>(hide volcanoes, gas flares, industry)</small>
+                  {t.area.vegOnly} <small>{t.area.vegOnlyNote}</small>
                 </label>
                 <label>
                   <input type="checkbox" checked={flags.dropLowConf} onChange={(e) => setFlags((f) => ({ ...f, dropLowConf: e.target.checked }))} />
-                  Drop low-confidence detections
+                  {t.area.dropLow}
                 </label>
               </div>
               {sel && period && summaryOfPeriod && (
@@ -366,12 +360,9 @@ export function App() {
                 <span><i className="pt pt-viirs" /> VIIRS</span>
                 <span><i className="pt pt-modis" /> MODIS</span>
                 <span>
-                  {period && points
-                    ? `${points.total.toLocaleString('en-US')} detections on the map, ${rangeName(period.from, period.to)}` +
-                      (points.total > points.lon.length ? ` (${points.lon.length.toLocaleString('en-US')} drawn)` : '')
-                    : ''}
+                  {period && points ? t.area.onMap(points.total, points.lon.length, t.rangeName(period.from, period.to)) : ''}
                 </span>
-                <span><i className="glow" /> all-time footprint</span>
+                <span><i className="glow" /> {t.area.footprint}</span>
               </p>
             </form>
           </aside>
@@ -381,37 +372,21 @@ export function App() {
               <section id="record" aria-labelledby="record-h">
                 <div className="section-head">
                   <div>
-                    <p className="eyebrow">The record</p>
-                    <h2 id="record-h">{baseline.length} years, ring by ring</h2>
+                    <p className="eyebrow">{t.record.eyebrow}</p>
+                    <h2 id="record-h">{t.record.title(baseline.length)}</h2>
                   </div>
-                  <div className="seg" role="group" aria-label="Which record to show">
-                    <button type="button" aria-pressed={mode === 'harmonized'} onClick={() => setMode('harmonized')}>Harmonized</button>
-                    <button type="button" aria-pressed={mode === 'raw'} onClick={() => setMode('raw')}>Raw record</button>
+                  <div className="seg" role="group" aria-label={t.record.modeAria}>
+                    <button type="button" aria-pressed={mode === 'harmonized'} onClick={() => setMode('harmonized')}>{t.record.harmonized}</button>
+                    <button type="button" aria-pressed={mode === 'raw'} onClick={() => setMode('raw')}>{t.record.raw}</button>
                   </div>
                 </div>
                 <p className="lede">
-                  {mode === 'raw' ? (
-                    Number.isFinite(steps.raw) ? (
-                      <>
-                        Raw counts: MODIS until 2012, VIIRS after. A typical year appears to jump{' '}
-                        <strong>×{steps.raw.toFixed(1)}</strong> at the dotted ring. That is sharper pixels, not more fire.
-                      </>
-                    ) : (
-                      <>Raw counts: MODIS until 2012, VIIRS after. MODIS saw almost nothing here before 2012, so the two halves cannot be compared at all.</>
-                    )
-                  ) : (
-                    <>
-                      One ring per year, {cal.year[FIRST_DAY]} at the core, 1 January at the top. Inside the dotted ring MODIS is converted to VIIRS-equivalent
-                      units.{' '}
-                      {Number.isFinite(steps.harmonized) && Number.isFinite(steps.raw) ? (
-                        <>
-                          Raw counts put a typical year since 2012 at ×{steps.raw.toFixed(1)} of one before; with the sensor effect removed it
-                          is <strong>×{steps.harmonized.toFixed(1)}</strong>.{' '}
-                        </>
-                      ) : null}
-                      Click any ring or cell to ask about that month.
-                    </>
-                  )}
+                  {mode === 'raw'
+                    ? t.record.ledeRaw(Number.isFinite(steps.raw) ? steps.raw : null)
+                    : t.record.ledeHarmonized(
+                      cal.year[FIRST_DAY],
+                      Number.isFinite(steps.harmonized) && Number.isFinite(steps.raw) ? steps : null,
+                    )}
                 </p>
                 <div className="record-grid">
                   <FireRings
@@ -421,7 +396,7 @@ export function App() {
                     max={ringMax}
                     sel={sel}
                     onSelect={select}
-                    title={bbox ? 'Selected area' : country?.name ?? ''}
+                    title={bbox ? t.record.selectedArea : countryName ?? ''}
                     describe={describeDay}
                     seamYear={SEAM_YEAR}
                   />
@@ -431,28 +406,28 @@ export function App() {
               </section>
 
               <section id="season" aria-labelledby="season-h">
-                <p className="eyebrow">The season</p>
-                <h2 id="season-h">When it burns, and how {sel.year} compares</h2>
+                <p className="eyebrow">{t.season.eyebrow}</p>
+                <h2 id="season-h">{t.season.title(sel.year)}</h2>
                 <SeasonChart season={analysis.season} year={sel.year} baseline={[baseline[0], baseline[baseline.length - 1]]} peak={analysis.peak} />
               </section>
 
               <section id="trust" aria-labelledby="trust-h">
-                <p className="eyebrow">The evidence</p>
-                <h2 id="trust-h">Can you trust the stitch?</h2>
+                <p className="eyebrow">{t.trust.eyebrow}</p>
+                <h2 id="trust-h">{t.trust.title}</h2>
                 <TrustPanel
                   analysis={analysis}
                   place={place}
                   isArea={!!bbox}
                   outages={index.viirsOutages}
-                  coverageEnd={longDate(index.coverageEndDay)}
-                  nrtFrom={index.nrtFromDay && Object.keys(index.nrtFromDay).length > 0 ? longDate(Math.min(...Object.values(index.nrtFromDay))) : null}
-                  snppEnd={index.snppEndDay != null ? longDate(index.snppEndDay) : null}
+                  coverageEnd={t.longDate(index.coverageEndDay)}
+                  nrtFrom={index.nrtFromDay && Object.keys(index.nrtFromDay).length > 0 ? t.longDate(Math.min(...Object.values(index.nrtFromDay))) : null}
+                  snppEnd={index.snppEndDay != null ? t.longDate(index.snppEndDay) : null}
                 />
               </section>
 
               <section id="export" aria-labelledby="export-h">
-                <p className="eyebrow">Take it with you</p>
-                <h2 id="export-h">Download the search</h2>
+                <p className="eyebrow">{t.exp.eyebrow}</p>
+                <h2 id="export-h">{t.exp.title}</h2>
                 {period && (
                   <ExportMenu
                     client={client}
@@ -463,9 +438,9 @@ export function App() {
                     sel={sel}
                     period={period}
                     ringsCanvas={() => rings.current?.canvas() ?? null}
-                    place={country ? (bbox ? `${country.name}, selected area` : country.name) : ''}
-                    headline={pv ? ANSWER[pv.verdict.level] : ''}
-                    detail={pv && wording ? verdictSentence(pv.verdict, wording.what, wording.usual, place) : ''}
+                    place={countryName ? t.exp.placeTitle(countryName, !!bbox) : ''}
+                    headline={pv ? t.answer[pv.verdict.level] : ''}
+                    detail={pv && wording ? t.verdictSentence(pv.verdict, wording.what, wording.usual, place) : ''}
                   />
                 )}
               </section>
@@ -474,11 +449,13 @@ export function App() {
 
           <footer className="foot">
             <p>
-              Hotspots: NASA FIRMS, MODIS (Terra and Aqua) and VIIRS (Suomi NPP, NOAA-20){analysis ? `, ${(analysis.detections.modis + analysis.detections.viirs).toLocaleString('en-US')} detections in this view` : ''}.
-              Data through {longDate(index.coverageEndDay)}{source?.live ? ', served live by the Ember Almanac API' : ', from the copy bundled with this site'}.
-              Imagery: NASA GIBS Blue Marble. Borders: Natural Earth.
+              {t.foot.sources(
+                analysis ? analysis.detections.modis + analysis.detections.viirs : null,
+                t.longDate(index.coverageEndDay),
+                source?.live ?? false,
+              )}
             </p>
-            <p>Built for the NASA Space Apps Challenge 2026. An independent project, not a NASA product.</p>
+            <p>{t.foot.built}</p>
           </footer>
         </>
       )}

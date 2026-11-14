@@ -5,6 +5,7 @@ import type { Feature, FeatureCollection } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
 // MapLibre 6 ships as ES modules and needs to be told where its worker lives.
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+import { useI18n } from '../i18n/index.tsx';
 import type { Manifest } from '../lib/analysis.ts';
 import type { BBox } from '../lib/harmonize.ts';
 import { EMBER, SERIES } from '../lib/color.ts';
@@ -72,6 +73,8 @@ interface Props {
 
 export function MapPanel(props: Props) {
   const { phase, view, countries, slug, bbox, drawing, onDraw, onPick, density, points, dataUrl } = props;
+  const { t } = useI18n();
+  const rtl = t.dir === 'rtl';
   const el = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const [ready, setReady] = useState(false);
@@ -169,8 +172,9 @@ export function MapPanel(props: Props) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'map-marker';
-      b.textContent = c.name;
-      b.setAttribute('aria-label', `Open ${c.name}`);
+      const name = t.country(c.slug, c.name);
+      b.textContent = name;
+      b.setAttribute('aria-label', t.map.open(name));
       b.addEventListener('click', () => latest.current.onPick(c.slug));
       const cx = (c.focus[0] + c.focus[2]) / 2;
       const cy = (c.focus[1] + c.focus[3]) / 2;
@@ -182,7 +186,7 @@ export function MapPanel(props: Props) {
         .addTo(map);
     });
     return () => markers.forEach((m) => m.remove());
-  }, [countries, ready]);
+  }, [countries, ready, t]);
 
   // Camera: spin during the intro, settle on the Mediterranean to pick, fly to the country in the tool.
   useEffect(() => {
@@ -208,8 +212,11 @@ export function MapPanel(props: Props) {
       const wide = view === 'pick' && window.innerWidth >= 1000;
       map.easeTo({
         ...MED_VIEW,
+        // With the card on the right, the view slides west so it does not cover Lebanon.
+        center: wide && rtl ? [MED_VIEW.center[0] + 5, MED_VIEW.center[1]] : MED_VIEW.center,
         zoom: wide ? 3.3 : MED_VIEW.zoom,
-        padding: { left: wide ? 640 : 0, top: 0, right: 0, bottom: 0 },
+        // Room for the card of places, which sits on the side where reading starts.
+        padding: { left: wide && !rtl ? 640 : 0, top: 0, right: wide && rtl ? 640 : 0, bottom: 0 },
         duration: instant ? 0 : 1800,
         essential: true,
       });
@@ -229,7 +236,7 @@ export function MapPanel(props: Props) {
     return () => cancelAnimationFrame(raf);
     // bbox is handled below so drawing does not re-trigger the fly-in
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, view, slug, countries, ready]);
+  }, [phase, view, slug, countries, ready, rtl]);
 
   // Selection rectangle.
   useEffect(() => {
@@ -331,10 +338,10 @@ export function MapPanel(props: Props) {
 
   return (
     <div className="map" data-phase={phase} data-drawing={drawing || undefined} data-pick={(phase === 'intro' && view === 'pick') || undefined}>
-      <div ref={el} className="map-canvas" role="application" aria-label="Map of fire hotspots" />
+      <div ref={el} className="map-canvas" role="application" aria-label={t.map.aria} />
       {failed && (
         <p className="map-failed" role="alert">
-          The map could not start ({failed}). The charts and exports below still work.
+          {t.map.failed(failed)}
         </p>
       )}
     </div>

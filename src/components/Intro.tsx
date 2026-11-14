@@ -1,9 +1,9 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useGSAP } from '@gsap/react';
+import { LangSwitch, useI18n } from '../i18n/index.tsx';
 import { rampPosition, SERIES } from '../lib/color.ts';
-import { fmtPct } from '../lib/format.ts';
 import { drawRings } from '../lib/rings.ts';
 import { dayIndex, FIRST_DAY, type Calendar } from '../lib/time.ts';
 import type { CountrySummary, GlobeView, IntroStory, SeamMode } from '../lib/types.ts';
@@ -24,12 +24,12 @@ const SEAM_YEAR = 2012;
 const REVEAL = 0.6;
 const BLEND_0 = 0.7;
 const BLEND_1 = 0.86;
-const TITLE = 'Ember Almanac';
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
 /** Yearly totals as bars: raw record with its 2012 jump, or the harmonized one. */
 export function SeamBars({ country, mode }: { country: CountrySummary; mode: SeamMode }) {
+  const { t } = useI18n();
   const years = country.years.filter((y) => y.complete);
   const max = Math.max(...years.map((y) => (mode === 'raw' ? y.raw : y.harmonized)));
   const first = years[0].year;
@@ -39,9 +39,7 @@ export function SeamBars({ country, mode }: { country: CountrySummary; mode: Sea
       <div
         className="seam-plot"
         role="img"
-        aria-label={mode === 'raw'
-          ? `Raw yearly fire detections in ${country.name}, ${first} to ${last}: counts jump when VIIRS replaces MODIS in 2012.`
-          : `Harmonized yearly fire activity in ${country.name}, ${first} to ${last}: no jump in 2012.`}
+        aria-label={t.intro.barsAria(mode, t.country(country.slug, country.name), first, last)}
       >
         {years.map((y) => {
           const v = mode === 'raw' ? y.raw : y.harmonized;
@@ -55,17 +53,17 @@ export function SeamBars({ country, mode }: { country: CountrySummary; mode: Sea
       </div>
       <div className="seam-axis" aria-hidden="true">
         <span>{first}</span>
-        <span className="seam-mark">{SEAM_YEAR} · VIIRS arrives</span>
+        <span className="seam-mark" dir={t.dir}>{t.intro.viirsArrives(SEAM_YEAR)}</span>
         <span>{last}</span>
       </div>
-      <ul className="legend" aria-label="Legend">
+      <ul className="legend" aria-label={t.intro.legendAria}>
         {mode === 'raw' ? (
           <>
-            <li><i className="key-dot" style={{ background: SERIES.modis }} /> MODIS detections</li>
-            <li><i className="key-dot" style={{ background: SERIES.viirs }} /> VIIRS detections</li>
+            <li><i className="key-dot" style={{ background: SERIES.modis }} /> {t.intro.modisDetections}</li>
+            <li><i className="key-dot" style={{ background: SERIES.viirs }} /> {t.intro.viirsDetections}</li>
           </>
         ) : (
-          <li><i className="key-dot" style={{ background: SERIES.harmonized }} /> Harmonized record</li>
+          <li><i className="key-dot" style={{ background: SERIES.harmonized }} /> {t.intro.harmonizedRecord}</li>
         )}
       </ul>
     </figure>
@@ -78,6 +76,7 @@ function robustMax(values: Float32Array): number {
 }
 
 export function Intro({ summary, story, cal, onView, onOpen }: Props) {
+  const { t } = useI18n();
   const root = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ringsBox = useRef<HTMLDivElement>(null);
@@ -88,6 +87,11 @@ export function Intro({ summary, story, cal, onView, onOpen }: Props) {
   const [bars, setBars] = useState<SeamMode>('raw');
   const onViewRef = useRef(onView);
   onViewRef.current = onView;
+  const name = t.country(story.slug, story.name);
+  // What the canvas writes, read at draw time so a change of language needs no new scroll setup.
+  const labels = useRef({ months: t.months, name });
+  labels.current = { months: t.months, name };
+  const redraw = useRef<(() => void) | null>(null);
 
   const pt = summary.find((s) => s.slug === story.slug) ?? summary[0];
   const complete = pt.years.filter((y) => y.complete);
@@ -117,9 +121,9 @@ export function Intro({ summary, story, cal, onView, onOpen }: Props) {
   const progressOf = (year: number) => (REVEAL * (dayIndex(year, 1, 1) - FIRST_DAY)) / (cal.nDays - FIRST_DAY);
   const marks = [
     { p: 0, label: String(cal.year[FIRST_DAY]), more: '' },
-    { p: progressOf(SEAM_YEAR), label: String(SEAM_YEAR), more: ' · VIIRS' },
+    { p: progressOf(SEAM_YEAR), label: String(SEAM_YEAR), more: t.intro.markViirs },
     { p: REVEAL, label: String(cal.year[cal.nDays - 1]), more: '' },
-    { p: (BLEND_0 + BLEND_1) / 2, label: 'Stitch', more: '' },
+    { p: (BLEND_0 + BLEND_1) / 2, label: t.intro.markStitch, more: '' },
   ];
 
   useGSAP(
@@ -161,8 +165,8 @@ export function Intro({ summary, story, cal, onView, onOpen }: Props) {
           }
           drawRings(ctx, {
             size, dpr, cal, t: mix, revealDay: day, sel: null,
-            title: String(cal.year[day - 1]), subtitle: story.name,
-            seamYear: SEAM_YEAR, seamPhase: blend * 72, bigTitle: true,
+            title: String(cal.year[day - 1]), subtitle: labels.current.name,
+            seamYear: SEAM_YEAR, seamPhase: blend * 72, bigTitle: true, months: labels.current.months,
           });
           if (ticker.current) ticker.current.textContent = Math.round(seen[day]).toLocaleString('en-US');
         }
@@ -195,10 +199,14 @@ export function Intro({ summary, story, cal, onView, onOpen }: Props) {
       const ro = new ResizeObserver(resize);
       ro.observe(box);
       resize();
-      document.fonts?.ready.then(() => {
+      const repaint = () => {
         lastKey = '';
         render();
-      });
+      };
+      redraw.current = repaint;
+      document.fonts?.ready.then(repaint);
+      // Another script's fonts arrive when the language changes.
+      document.fonts?.addEventListener('loadingdone', repaint);
 
       // Title rises letter by letter, then drifts away as the story starts.
       if (!reduce) {
@@ -240,87 +248,76 @@ export function Intro({ summary, story, cal, onView, onOpen }: Props) {
         onLeaveBack: () => onViewRef.current('spin'),
       });
 
-      return () => ro.disconnect();
+      return () => {
+        ro.disconnect();
+        document.fonts?.removeEventListener('loadingdone', repaint);
+        redraw.current = null;
+      };
     },
     { scope: root, dependencies: [data, cal, story, topYear] },
   );
 
+  // A new language changes the canvas labels and the height of the text around it.
+  useEffect(() => {
+    redraw.current?.();
+    ScrollTrigger.refresh();
+  }, [t]);
+
+  const captions = t.intro.captions({
+    name,
+    firstYear: cal.year[FIRST_DAY],
+    topYear,
+    seamYear: SEAM_YEAR,
+    years: complete.length,
+    seamStep: pt.seamStepRaw,
+    errorRaw: pt.validation.mdapeRaw,
+    error: pt.validation.mdape,
+  });
+
   return (
     <main ref={root} className="intro">
       <div ref={veil} className="veil" aria-hidden="true" />
-      <button type="button" className="skip" onClick={() => onOpen(story.slug)}>Skip to the almanac</button>
+      <div className="intro-actions">
+        <LangSwitch />
+        <button type="button" className="skip" onClick={() => onOpen(story.slug)}>{t.intro.skip}</button>
+      </div>
 
       <section className="scene scene-hero">
         <div className="hero-inner">
-          <p className="eyebrow hero-fade">NASA Space Apps 2026 · MODIS and VIIRS hot spots</p>
-          <h1 aria-label={TITLE}>
-            {TITLE.split(' ').map((word, w) => (
+          <p className="eyebrow hero-fade">{t.intro.eyebrow}</p>
+          <h1 lang="en" aria-label={t.brand}>
+            {t.brand.split(' ').map((word, w) => (
               <span key={w} className="hero-word" aria-hidden="true">
                 {[...word].map((ch, i) => <span key={i} className="hero-char">{ch}</span>)}
               </span>
             ))}
           </h1>
-          <p className="hero-q hero-fade">Is this fire season normal?</p>
-          <p className="hero-sub hero-fade">
-            {complete.length} years of NASA fire detections for one place, stitched into a single record you can read like tree rings.
-          </p>
-          <p className="scroll-cue hero-fade" aria-hidden="true">Scroll to grow the rings</p>
+          <p className="hero-q hero-fade">{t.intro.question}</p>
+          <p className="hero-sub hero-fade">{t.intro.sub(complete.length)}</p>
+          <p className="scroll-cue hero-fade" aria-hidden="true">{t.intro.cue}</p>
         </div>
       </section>
 
-      <section className="scene scene-rings" aria-label={`The fire record of ${story.name}, year by year`}>
+      <section className="scene scene-rings" aria-label={t.intro.sceneAria(name)}>
         <div className="stage">
           <div ref={ringsBox} className="story-rings">
             <canvas
               ref={canvasRef}
               role="img"
-              aria-label={`Fire rings for ${story.name} growing from ${cal.year[FIRST_DAY]} to ${cal.year[cal.nDays - 1]} as the page scrolls: one ring per year, brighter where more fire was detected.`}
+              aria-label={t.intro.canvasAria(name, cal.year[FIRST_DAY], cal.year[cal.nDays - 1])}
             />
           </div>
 
           <div className="story-text">
-            <p className="ticker" aria-hidden="true">
-              <span ref={ticker}>0</span> detections logged so far
-            </p>
+            <p className="ticker" aria-hidden="true">{t.intro.ticker(<span ref={ticker}>0</span>)}</p>
             <div className="captions" data-active={caption}>
-              <article>
-                <p className="eyebrow">{cal.year[FIRST_DAY]} onward</p>
-                <h2>Every ring is a year.</h2>
-                <p>
-                  Since November {cal.year[FIRST_DAY]}, NASA's MODIS has logged each fire it could see in {story.name}. One step around
-                  the ring is one day. Brighter means more fire.
-                </p>
-              </article>
-              <article>
-                <p className="eyebrow">{topYear}</p>
-                <h2>Some years leave a scar.</h2>
-                <p>
-                  {topYear} is the most active year in {story.name}'s record. Trees keep fire scars in their rings; this is the same
-                  idea, read from orbit.
-                </p>
-              </article>
-              <article>
-                <p className="eyebrow">{SEAM_YEAR} · the problem</p>
-                <h2>A sharper eye arrives. The record breaks.</h2>
-                <p>
-                  VIIRS swaps 1 km pixels for 375 m ones and catches fires MODIS missed. Past the dotted ring a typical year appears to
-                  jump <strong>×{pt.seamStepRaw.toFixed(1)}</strong>. Nothing on the ground changed.
-                </p>
-              </article>
-              <article>
-                <p className="eyebrow">The fix</p>
-                <h2>So we stitched it.</h2>
-                <p>
-                  Fire is counted on one 1 km grid, the conversion is learned from the years both sensors flew, and it is checked on
-                  years the model never saw. Monthly error falls from <strong>{fmtPct(pt.validation.mdapeRaw)}</strong> to{' '}
-                  <strong>{fmtPct(pt.validation.mdape)}</strong>.
-                </p>
-              </article>
-              <article>
-                <p className="eyebrow">One record</p>
-                <h2>Now ask it something.</h2>
-                <p>{complete.length} years, two sensors, one consistent record. Keep scrolling to pick a place.</p>
-              </article>
+              {captions.map((c, i) => (
+                <article key={i}>
+                  <p className="eyebrow">{c.eyebrow}</p>
+                  <h2>{c.title}</h2>
+                  <p>{c.body}</p>
+                </article>
+              ))}
             </div>
             <div className="story-bars" data-show={caption >= 2 || undefined}>
               <SeamBars country={pt} mode={bars} />
@@ -340,16 +337,16 @@ export function Intro({ summary, story, cal, onView, onOpen }: Props) {
 
       <section className="scene scene-pick">
         <div className="card">
-          <p className="eyebrow">The almanac</p>
-          <h2>Pick a place.</h2>
-          <p>Each one opens with an answer first, then the evidence behind it.</p>
+          <p className="eyebrow">{t.intro.pickEyebrow}</p>
+          <h2>{t.intro.pickTitle}</h2>
+          <p>{t.intro.pickText}</p>
           <ul className="places">
             {summary.map((s) => (
               <li key={s.slug}>
                 <button type="button" onClick={() => onOpen(s.slug)}>
-                  <strong>{s.name}</strong>
-                  <span>{(s.detections.modis + s.detections.viirs).toLocaleString('en-US')} detections</span>
-                  <span>VIIRS sees ×{s.ratio.toFixed(1)} what MODIS does</span>
+                  <strong>{t.country(s.slug, s.name)}</strong>
+                  <span>{t.intro.detections(s.detections.modis + s.detections.viirs)}</span>
+                  <span>{t.intro.viirsSees(s.ratio)}</span>
                 </button>
               </li>
             ))}

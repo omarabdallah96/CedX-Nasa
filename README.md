@@ -1,6 +1,6 @@
-# Ember Almanac
+# Firesight
 
-**Is this fire season normal?** Ember Almanac stitches NASA fire detections from November 2000 to yesterday (MODIS since 2000, VIIRS since 2012) into one consistent record, and answers that question for a country or any box you draw inside it.
+**Is this fire season normal?** Firesight stitches NASA fire detections from November 2000 to yesterday (MODIS since 2000, VIIRS since 2012) into one consistent record, and answers that question for a country or any box you draw inside it.
 
 Built for the NASA Space Apps Challenge 2026, challenge "Harmonization of MODIS and VIIRS Hot Spots".
 
@@ -16,6 +16,7 @@ Built for the NASA Space Apps Challenge 2026, challenge "Harmonization of MODIS 
 - **Evidence.** Held-out validation, conversion factors by month, and what the record cannot tell you.
 - **Exports.** CSV of every hotspot in the period, with its weight in the harmonized record; the daily series and the whole calendar table as CSV; the calendar and the rings as PNG cards.
 - **API.** The same answers as JSON, for a phone app or anything else.
+- **English and Arabic.** The whole site, the charts and the PNG cards switch language; Arabic is laid out right to left. The site opens in the browser's language, the switch in the header remembers the choice, and `?lang=ar` or `?lang=en` in the address forces one. The API and the CSV column names stay in English.
 
 ## Run it
 
@@ -104,17 +105,16 @@ src/lib/    harmonize.ts · stats.ts · analysis.ts · service.ts · sentence.ts
 src/worker/ analysis.worker.ts   runs lib/service.ts off the main thread
 server/     app.ts (routes) · main.ts · refresh.ts   runs the same lib/service.ts   (+ api.test.ts)
 src/components/  MapPanel · Verdict · NowCard · PeriodPanel · FireRings · BurnCalendar · Records · SeasonChart · TrustPanel · ExportMenu · Intro
+src/i18n/   en.tsx (English wording, and the shape every language fills) · ar.tsx (Arabic) · index.tsx (which language is in use)   (+ i18n.test.ts)
 ```
+
+To add a language, copy `src/i18n/ar.tsx`, translate it (TypeScript reports any wording left out), and add its code to `Lang` in `en.tsx` and to `STRINGS` in `index.tsx`. The header switch toggles between two languages; a third needs a menu there.
 
 ## Data and credits
 
 - Hotspots: [NASA FIRMS](https://www.earthdata.nasa.gov/data/tools/firms) yearly country archive and area API, MODIS (Terra, Aqua) and VIIRS (Suomi NPP, NOAA-20).
 - Imagery: NASA GIBS, Blue Marble Shaded Relief and Bathymetry.
 - Borders: Natural Earth (public domain).
-- Libraries: React, Vite, MapLibre GL JS, GSAP (ScrollTrigger), d3-scale, d3-shape, Hono; fonts Fraunces and IBM Plex.
+- Libraries: React, Vite, MapLibre GL JS, GSAP (ScrollTrigger), d3-scale, d3-shape, Hono; fonts Fraunces and IBM Plex, with Amiri and IBM Plex Sans Arabic for Arabic.
 
 An independent project, not a NASA product.
-
-## Use of AI tools
-
-This project was built with Claude Code (Anthropic). The assistant wrote the data pipeline, the harmonization and statistics code, the API server, the tests, the interface and this README, and ran the data exploration that chose the method. The team chose the challenge, the concept direction, the showcase region and the features, and reviewed the result.

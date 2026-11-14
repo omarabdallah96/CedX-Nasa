@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import type { Analysis } from '../lib/analysis.ts';
+import { useI18n } from '../i18n/index.tsx';
 import { ember, inkOn, rampPosition, SERIES } from '../lib/color.ts';
-import { fmtCompact, fmtCount, fmtRatio } from '../lib/format.ts';
-import { MONTHS, MONTHS_LONG } from '../lib/time.ts';
+import { fmtCompact } from '../lib/format.ts';
 import type { SeamMode } from '../lib/types.ts';
 import type { Selection } from './FireRings.tsx';
 
@@ -15,6 +15,7 @@ interface Props {
 }
 
 export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props) {
+  const { t } = useI18n();
   const mm = mode === 'harmonized' ? analysis.monthsH : analysis.monthsNaive;
   const wrap = useRef<HTMLDivElement>(null);
   const cells = useRef(new Map<string, HTMLButtonElement>());
@@ -27,26 +28,24 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
     return { max, totals, maxTotal: Math.max(...totals) };
   }, [mm]);
 
-  const unit = mode === 'harmonized' ? 'cell-days' : 'raw detections';
   const order = mm.years.map((_, i) => i).reverse();
 
   const describe = (yi: number, m: number): string[] => {
     const year = mm.years[yi];
     const v = mm.values[yi][m];
     const partial = mm.partial?.year === year && mm.partial.month === m ? mm.partial.days : 0;
-    const head = `${MONTHS_LONG[m]} ${year}${partial ? ` so far (${partial} days)` : ''}: ${fmtCount(v)} ${unit}`;
-    if (mode === 'raw') {
-      return [head, year < seamYear ? 'MODIS detections, 1 km pixels' : 'VIIRS detections, 375 m pixels'];
-    }
+    const month = t.monthsLong[m];
+    const head = t.cal.head(month, year, partial, t.cal.value(v, mode));
+    if (mode === 'raw') return [head, year < seamYear ? t.cal.rawModis : t.cal.rawViirs];
     const lines = [head];
     const med = analysis.climate.median[m];
-    if (partial) lines.push(`Month still running; a full ${MONTHS_LONG[m]} usually reaches ${fmtCount(med)}`);
-    else if (med > 0) lines.push(`${fmtRatio(v / med)} the usual ${MONTHS_LONG[m]} (median ${fmtCount(med)})`);
-    else lines.push(`The usual ${MONTHS_LONG[m]} sees none`);
+    if (partial) lines.push(t.cal.running(month, med));
+    else if (med > 0) lines.push(t.cal.versus(v / med, month, med));
+    else lines.push(t.cal.none(month));
     const lo = analysis.monthsLo.values[yi][m];
     const hi = analysis.monthsHi.values[yi][m];
-    if (hi - lo > 0.5) lines.push(`Scaled from MODIS · likely ${fmtCount(lo)}–${fmtCount(hi)}`);
-    else if (year >= seamYear) lines.push('VIIRS, as observed');
+    if (hi - lo > 0.5) lines.push(t.cal.scaled(lo, hi));
+    else if (year >= seamYear) lines.push(t.cal.observed);
     return lines;
   };
 
@@ -59,8 +58,10 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
   const move = (e: React.KeyboardEvent, yi: number, m: number) => {
     const pos = order.indexOf(yi);
     let target: [number, number] | null = null;
-    if (e.key === 'ArrowLeft') target = [yi, m - 1];
-    else if (e.key === 'ArrowRight') target = [yi, m + 1];
+    // The table runs right to left in Arabic, so the arrow keys follow what is on screen.
+    const right = t.dir === 'rtl' ? -1 : 1;
+    if (e.key === 'ArrowLeft') target = [yi, m - right];
+    else if (e.key === 'ArrowRight') target = [yi, m + right];
     else if (e.key === 'ArrowUp' && pos > 0) target = [order[pos - 1], m];
     else if (e.key === 'ArrowDown' && pos < order.length - 1) target = [order[pos + 1], m];
     if (!target) return;
@@ -74,16 +75,17 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
   return (
     <div ref={wrap} className="calendar" data-mode={mode}>
       <table>
-        <caption className="sr-only">
-          Burning calendar: {unit} per month, one row per year. {mode === 'harmonized'
-            ? 'Values before 2012 are MODIS scaled to VIIRS-equivalent units.'
-            : 'Raw counts: MODIS before 2012, VIIRS from 2012.'}
-        </caption>
+        <caption className="sr-only">{t.cal.caption(mode)}</caption>
         <thead>
           <tr>
-            <th scope="col" className="cal-year">Year</th>
-            {MONTHS.map((m) => <th key={m} scope="col">{m}</th>)}
-            <th scope="col" className="cal-total">Year total</th>
+            <th scope="col" className="cal-year">{t.cal.year}</th>
+            {t.months.map((m, i) => (
+              <th key={m} scope="col" abbr={t.monthsLong[i]}>
+                <span className="cal-month">{m}</span>
+                <span className="cal-month-n" aria-hidden="true">{i + 1}</span>
+              </th>
+            ))}
+            <th scope="col" className="cal-total">{t.cal.yearTotal}</th>
           </tr>
         </thead>
         <tbody>
@@ -94,8 +96,8 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
               <tr key={year} className={year === seamYear ? 'cal-seam' : undefined}>
                 <th scope="row" className="cal-year">{year}</th>
                 {mm.values[yi].map((v, m) => {
-                  if (Number.isNaN(v)) return <td key={m} className="cal-none" aria-label="No satellite coverage" />;
-                  const t = rampPosition(v, max);
+                  if (Number.isNaN(v)) return <td key={m} className="cal-none" aria-label={t.cal.noCoverage} />;
+                  const heat = rampPosition(v, max);
                   const selected = sel.year === year && sel.month === m;
                   return (
                     <td key={m}>
@@ -107,7 +109,7 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
                         }}
                         className="cal-cell"
                         data-partial={mm.partial?.year === year && mm.partial.month === m ? '' : undefined}
-                        style={{ background: ember(t), color: inkOn(t) }}
+                        style={{ background: ember(heat), color: inkOn(heat) }}
                         aria-pressed={selected}
                         aria-label={describe(yi, m).join('. ')}
                         tabIndex={selected ? 0 : -1}
@@ -135,7 +137,7 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
       <div className="cal-legend">
         <span className="ramp" aria-hidden="true" />
         <span>0</span>
-        <span className="ramp-max">{fmtCount(max)} {unit} in a month</span>
+        <span className="ramp-max">{t.cal.legendMax(max, mode)}</span>
         <span className="cal-keys">
           {mode === 'raw' ? (
             <>
@@ -144,7 +146,7 @@ export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props)
             </>
           ) : (
             <>
-              <i style={{ background: SERIES.harmonized }} /> Harmonized
+              <i style={{ background: SERIES.harmonized }} /> {t.cal.harmonized}
             </>
           )}
         </span>

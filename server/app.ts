@@ -150,7 +150,7 @@ export function createApp({ service, dataDir, siteDir }: AppOptions) {
   api.get('/', async (c) => {
     const index = await service.index();
     return c.json({
-      name: 'Ember Almanac API',
+      name: 'Firesight API',
       version: 1,
       about: 'Harmonized MODIS + VIIRS active-fire record from NASA FIRMS. An independent project, not a NASA product.',
       coverage: { from: isoDate(FIRST_DAY), to: index.coverageEnd },
@@ -360,7 +360,7 @@ export function createApp({ service, dataDir, siteDir }: AppOptions) {
     if (format === 'csv') {
       const { rows } = await service.rows(slug, filters, from, to);
       c.header('Content-Type', 'text/csv; charset=utf-8');
-      c.header('Content-Disposition', `attachment; filename="ember-almanac_${slug}_${isoDate(from)}_${isoDate(to)}.csv"`);
+      c.header('Content-Disposition', `attachment; filename="firesight_${slug}_${isoDate(from)}_${isoDate(to)}.csv"`);
       return c.body(toCsv(rows));
     }
     const limit = int(query.limit, 'limit', 1, MAX_JSON_HOTSPOTS) ?? 5000;
