@@ -43,6 +43,7 @@ const app = createApp({
   live,
   requestsPer10Min: Number(process.env.RATE_LIMIT_PER_10_MIN ?? 1200),
   reportsPerHour: Number(process.env.REPORTS_PER_HOUR ?? 30),
+  adminPassword: process.env.ADMIN_PASSWORD ?? '',
 });
 const port = Number(process.env.PORT) || 8787;
 
@@ -50,6 +51,7 @@ serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Firesight API on http://localhost:${info.port}/api/v1`);
   console.log(`reports: stored in ${storageDir}`);
   if (!live.available) console.log('live: FIRMS_MAP_KEY is not set, /live answers 503');
+  if (!process.env.ADMIN_PASSWORD) console.log('admin: ADMIN_PASSWORD is not set, /admin is off');
   startRefresh(service);
   // Old reports are deleted daily.
   const prune = () => reports.prune().then((n) => n && console.log(`reports: removed ${n} older than 90 days`), console.error);

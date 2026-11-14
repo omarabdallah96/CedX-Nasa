@@ -45,6 +45,23 @@ export interface Report {
   hasPhoto: boolean;
 }
 
+/** What moderators see: the report, whether it is hidden, and a short tag of the sending device. */
+export interface AdminReport extends Report {
+  hidden: boolean;
+  /** First characters of a hash of the device id: groups one phone's reports without exposing the id. */
+  device: string;
+}
+
+export interface ReportStats {
+  total: number;
+  hidden: number;
+  withPhoto: number;
+  last24h: number;
+  last7d: number;
+  devices7d: number;
+  byLabel: Record<string, number>;
+}
+
 interface Row {
   id: string;
   lat: number;
@@ -58,9 +75,12 @@ interface Row {
   hotspot_time: string | null;
   photo: string | null;
   token_hash: string;
+  hidden: number;
+  device_tag: string;
 }
 
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
+export const deviceTag = (deviceId: string) => hash(`device:${deviceId}`).slice(0, 10);
 
 function toReport(r: Row): Report {
   return {
@@ -78,15 +98,27 @@ function toReport(r: Row): Report {
   };
 }
 
+const toAdminReport = (r: Row): AdminReport => ({ ...toReport(r), hidden: r.hidden === 1, device: r.device_tag });
+
 export interface ReportStore {
   /** Saves a report. Sending the same deviceId + clientId again returns the first copy. */
   add(report: NewReport, photo?: { bytes: Uint8Array<ArrayBuffer>; type: string }): Promise<{ report: Report; deleteToken: string | null; created: boolean }>;
+  /** Public reads leave hidden reports out. */
   list(query: { bbox?: [number, number, number, number] | null; since: string; limit: number }): Report[];
   get(id: string): Report | null;
-  photo(id: string): Promise<{ bytes: Uint8Array<ArrayBuffer>; type: string } | null>;
+  photo(id: string, opts?: { includeHidden?: boolean }): Promise<{ bytes: Uint8Array<ArrayBuffer>; type: string } | null>;
   /** Deletes when the token matches the one handed out at creation. */
   remove(id: string, token: string): Promise<'deleted' | 'not_found' | 'forbidden'>;
   prune(now?: number): Promise<number>;
+
+  // ---- Moderation ----
+  /** Newest first; `before` is the createdAt of the last report of the previous page. */
+  adminList(query: { status: 'all' | 'visible' | 'hidden'; device?: string; label?: string; before?: string; limit: number }): AdminReport[];
+  adminGet(id: string): AdminReport | null;
+  /** Hides or shows one report, or every report of a device tag. Returns how many changed. */
+  setHidden(target: { id: string } | { device: string }, hidden: boolean): number;
+  adminRemove(id: string): Promise<boolean>;
+  stats(now?: number): ReportStats;
   close(): void;
 }
 
@@ -119,12 +151,23 @@ export function createReportStore(dir: string): ReportStore {
     );
     CREATE INDEX IF NOT EXISTS reports_created ON reports (created_at);
   `);
+  // Columns added after the first release.
+  const columns = new Set((db.prepare('PRAGMA table_info(reports)').all() as unknown as { name: string }[]).map((c) => c.name));
+  if (!columns.has('hidden')) db.exec('ALTER TABLE reports ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('device_tag')) {
+    db.exec(`ALTER TABLE reports ADD COLUMN device_tag TEXT NOT NULL DEFAULT ''`);
+    const fill = db.prepare('UPDATE reports SET device_tag = ? WHERE id = ?');
+    for (const r of db.prepare('SELECT id, device_id FROM reports').all() as unknown as { id: string; device_id: string }[]) {
+      fill.run(deviceTag(r.device_id), r.id);
+    }
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS reports_device ON reports (device_tag)');
 
   const byClient = db.prepare('SELECT * FROM reports WHERE device_id = ? AND client_id = ?');
   const byId = db.prepare('SELECT * FROM reports WHERE id = ?');
   const insert = db.prepare(`
-    INSERT INTO reports (id, device_id, client_id, lat, lon, created_at, received_at, label, note, bearing, hotspot_sensor, hotspot_time, photo, token_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    INSERT INTO reports (id, device_id, client_id, lat, lon, created_at, received_at, label, note, bearing, hotspot_sensor, hotspot_time, photo, token_hash, device_tag)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const del = db.prepare('DELETE FROM reports WHERE id = ?');
 
   const photoFile = (name: string) => path.join(photoDir, name);
@@ -148,14 +191,14 @@ export function createReportStore(dir: string): ReportStore {
       }
       insert.run(
         id, r.deviceId, r.clientId, r.lat, r.lon, r.createdAt, new Date().toISOString(), r.label, r.note,
-        r.bearing, r.hotspotSensor, r.hotspotTime, photoName, hash(token),
+        r.bearing, r.hotspotSensor, r.hotspotTime, photoName, hash(token), deviceTag(r.deviceId),
       );
       return { report: toReport(byId.get(id) as unknown as Row), deleteToken: token, created: true };
     },
 
     list({ bbox, since, limit }) {
       const args: (string | number)[] = [since];
-      let where = 'created_at >= ?';
+      let where = 'hidden = 0 AND created_at >= ?';
       if (bbox) {
         where += ' AND lon >= ? AND lat >= ? AND lon <= ? AND lat <= ?';
         args.push(...bbox);
@@ -166,12 +209,12 @@ export function createReportStore(dir: string): ReportStore {
 
     get(id) {
       const row = byId.get(id) as Row | undefined;
-      return row ? toReport(row) : null;
+      return row && !row.hidden ? toReport(row) : null;
     },
 
-    async photo(id) {
+    async photo(id, { includeHidden = false } = {}) {
       const row = byId.get(id) as Row | undefined;
-      if (!row?.photo) return null;
+      if (!row?.photo || (row.hidden && !includeHidden)) return null;
       const ext = row.photo.split('.').pop()!;
       const type = Object.keys(PHOTO_TYPES).find((t) => PHOTO_TYPES[t] === ext)!;
       if (memory) {
@@ -202,6 +245,68 @@ export function createReportStore(dir: string): ReportStore {
         await dropPhoto(row.photo);
       }
       return old.length;
+    },
+
+    adminList({ status, device, label, before, limit }) {
+      const where: string[] = [];
+      const args: (string | number)[] = [];
+      if (status === 'visible') where.push('hidden = 0');
+      if (status === 'hidden') where.push('hidden = 1');
+      if (device) {
+        where.push('device_tag = ?');
+        args.push(device);
+      }
+      if (label) {
+        where.push('label = ?');
+        args.push(label);
+      }
+      if (before) {
+        where.push('created_at < ?');
+        args.push(before);
+      }
+      const sql = `SELECT * FROM reports ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT ?`;
+      return (db.prepare(sql).all(...args, limit) as unknown as Row[]).map(toAdminReport);
+    },
+
+    adminGet(id) {
+      const row = byId.get(id) as Row | undefined;
+      return row ? toAdminReport(row) : null;
+    },
+
+    setHidden(target, hidden) {
+      const flag = hidden ? 1 : 0;
+      const res = 'id' in target
+        ? db.prepare('UPDATE reports SET hidden = ? WHERE id = ?').run(flag, target.id)
+        : db.prepare('UPDATE reports SET hidden = ? WHERE device_tag = ?').run(flag, target.device);
+      return Number(res.changes);
+    },
+
+    async adminRemove(id) {
+      const row = byId.get(id) as Row | undefined;
+      if (!row) return false;
+      del.run(id);
+      await dropPhoto(row.photo);
+      return true;
+    },
+
+    stats(now = Date.now()) {
+      const iso = (ms: number) => new Date(ms).toISOString();
+      const one = (sql: string, ...args: string[]) => Number((db.prepare(sql).get(...args) as { n: number }).n);
+      const day = iso(now - 86_400_000);
+      const week = iso(now - 7 * 86_400_000);
+      const byLabel: Record<string, number> = {};
+      for (const r of db.prepare('SELECT label, COUNT(*) AS n FROM reports GROUP BY label').all() as unknown as { label: string; n: number }[]) {
+        byLabel[r.label] = Number(r.n);
+      }
+      return {
+        total: one('SELECT COUNT(*) AS n FROM reports'),
+        hidden: one('SELECT COUNT(*) AS n FROM reports WHERE hidden = 1'),
+        withPhoto: one('SELECT COUNT(*) AS n FROM reports WHERE photo IS NOT NULL'),
+        last24h: one('SELECT COUNT(*) AS n FROM reports WHERE received_at >= ?', day),
+        last7d: one('SELECT COUNT(*) AS n FROM reports WHERE received_at >= ?', week),
+        devices7d: one('SELECT COUNT(DISTINCT device_tag) AS n FROM reports WHERE received_at >= ?', week),
+        byLabel,
+      };
     },
 
     close() {

@@ -12,6 +12,7 @@ import type { Context } from 'hono';
 import { COUNTRIES } from '../pipeline/config.mjs';
 import { LiveUnavailableError, MAX_HOURS, type Live } from './live.ts';
 import { createRateLimit } from './ratelimit.ts';
+import { createAdmin } from './admin.ts';
 import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
 import { lastWeek, rangeSummary, selectionVerdict, type RangeSummary } from '../src/lib/analysis.ts';
 import { parseBox } from '../src/lib/coords.ts';
@@ -83,6 +84,8 @@ export interface AppOptions {
   requestsPer10Min?: number;
   /** New reports per client per hour. */
   reportsPerHour?: number;
+  /** Password for the /admin moderation page; empty turns it off. */
+  adminPassword?: string;
 }
 
 /** Arabic names, from pipeline/config.mjs. */
@@ -109,7 +112,7 @@ function clientKey(c: Context): string {
   }
 }
 
-export function createApp({ service, dataDir, siteDir, reports, live, requestsPer10Min = 1200, reportsPerHour = 30 }: AppOptions) {
+export function createApp({ service, dataDir, siteDir, reports, live, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
@@ -688,6 +691,7 @@ export function createApp({ service, dataDir, siteDir, reports, live, requestsPe
   app.get('/api/v1/', (c) => c.redirect('/api/v1'));
   app.route('/api/v1', api);
   app.all('/api/*', (c) => c.json({ error: { code: 'not_found', message: 'The API lives under /api/v1.' } }, 404));
+  app.route('/', createAdmin({ password: adminPassword, reports, clientKey }));
   if (siteDir) app.use('*', serveStatic({ root: path.relative(process.cwd(), siteDir) || '.' }));
   return app;
 }

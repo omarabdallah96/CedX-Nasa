@@ -74,7 +74,9 @@ curl "http://localhost:8787/api/v1/countries/portugal/range?from=2017-10-10&to=2
 
 Report fields: `deviceId` and `clientId` (4–64 letters, digits, `-`, `_`; the same pair sent twice returns the first copy, so retries are safe), `lat`, `lon`, `createdAt` (ISO time, within 30 days), `label` (`wildfire`, `smoke`, `agriculturalBurn`, `industrial`, `falseAlarm`, `unsure`), and optionally `note` (≤ 500 characters), `bearing` (0–360°, where the reporter pointed at the smoke), `hotspotSensor`, `hotspotTime`. The device id is never returned. Reports are kept 90 days.
 
-There are no accounts. Reports are stored in SQLite with their photos under `STORAGE_DIR` (default `./storage`; a volume in Docker). Each client gets 1200 requests per 10 minutes and 30 new reports per hour (`RATE_LIMIT_PER_10_MIN`, `REPORTS_PER_HOUR`); behind a proxy the client is the first `X-Forwarded-For` address. Put a proxy limit in front as well before exposing it widely.
+**Moderation.** `/admin` is a password-protected page (set `ADMIN_PASSWORD`) listing every report with its photo. A moderator can hide a report (kept, but no longer sent to phones), hide everything from one phone, or delete a report for good. Sign-in sets an HttpOnly, SameSite=Strict session cookie for 12 hours; password guesses are limited to 10 per 15 minutes; changing the password signs everyone out.
+
+There are no user accounts. Reports are stored in SQLite with their photos under `STORAGE_DIR` (default `./storage`; a volume in Docker). Each client gets 1200 requests per 10 minutes and 30 new reports per hour (`RATE_LIMIT_PER_10_MIN`, `REPORTS_PER_HOUR`); behind a proxy the client is the first `X-Forwarded-For` address. Put a proxy limit in front as well before exposing it widely.
 
 ## How the two records are stitched
 
@@ -111,7 +113,7 @@ The factor differs fourfold between these four countries, which is why it is fit
 pipeline/   fetch-firms.mjs · fetch-recent.mjs · clip.mjs · pack.mjs · boundaries.mjs · summarize.ts
 src/lib/    harmonize.ts · stats.ts · analysis.ts · service.ts · sentence.ts · rings.ts · coords.ts · time.ts   (+ harmonize.test.ts)
 src/worker/ analysis.worker.ts   runs lib/service.ts off the main thread
-server/     app.ts (routes) · main.ts · refresh.ts · live.ts (FIRMS NRT) · reports.ts (SQLite) · ratelimit.ts   runs the same lib/service.ts   (+ api.test.ts, phone.test.ts)
+server/     app.ts (routes) · main.ts · refresh.ts · live.ts (FIRMS NRT) · reports.ts (SQLite) · admin.ts + admin-page.ts (/admin) · ratelimit.ts   runs the same lib/service.ts   (+ api.test.ts, phone.test.ts, admin.test.ts)
 src/components/  MapPanel · Verdict · NowCard · PeriodPanel · FireRings · BurnCalendar · Records · SeasonChart · TrustPanel · ExportMenu · Intro
 src/i18n/   en.tsx (English wording, and the shape every language fills) · ar.tsx (Arabic) · index.tsx (which language is in use)   (+ i18n.test.ts)
 ```
