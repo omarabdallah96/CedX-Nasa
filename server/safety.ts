@@ -494,7 +494,8 @@ export function createSafety({ fetchJson = defaultFetchJson, cacheDir, orsKey = 
         const got = parseOrs(await fetchJson(ORS_URL, {
           method: 'POST',
           body: JSON.stringify(body),
-          headers: { Authorization: orsKey, 'Content-Type': 'application/json' },
+          // The geojson endpoint answers 406 to a plain application/json Accept.
+          headers: { Authorization: orsKey, 'Content-Type': 'application/json', Accept: 'application/geo+json, application/json' },
         }));
         if (got.length) return got;
       } catch {
