@@ -17,7 +17,8 @@ import { deviceTag, LABELS, type ReportStore } from './reports.ts';
 import { normalizeEmail, PLANS, type AccountStore, type Plan } from './accounts.ts';
 import type { DeviceStore } from './devices.ts';
 import type { Push } from './push.ts';
-import { BROADCAST_LEVELS, MAX_HOURS, MAX_MESSAGE, MAX_RADIUS_KM, MAX_TITLE, type BroadcastLevel, type BroadcastStore } from './broadcasts.ts';
+import { ORG_ROLES, type OrgRole, type OrgStore } from './orgs.ts';
+import { BROADCAST_LEVELS, MAX_HOURS, MAX_MESSAGE, MAX_RADIUS_KM, MAX_TITLE, deliver, type BroadcastLevel, type BroadcastStore } from './broadcasts.ts';
 
 const COOKIE = 'firesight_admin';
 const SESSION_MS = 12 * 3_600_000;
@@ -33,6 +34,8 @@ export interface AdminOptions {
   /** Phones registered for instant alerts, and the push sender. */
   devices?: DeviceStore;
   push?: Push;
+  /** Organizations: the Organizations page verifies them. */
+  orgs?: OrgStore;
   /** Who is asking, for the login limiter. */
   clientKey: (c: Context) => string;
   now?: () => number;
@@ -67,7 +70,7 @@ function sameSecret(a: string, b: string) {
   return timingSafeEqual(sha256(a), sha256(b));
 }
 
-export function createAdmin({ password = '', reports, accounts, broadcasts, devices, push, clientKey, now = Date.now }: AdminOptions) {
+export function createAdmin({ password = '', reports, accounts, broadcasts, devices, push, orgs, clientKey, now = Date.now }: AdminOptions) {
   const app = new Hono();
   const configured = password.length > 0;
   const key = sha256(`firesight-admin-session:${password}`);
@@ -89,7 +92,7 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, devi
   const secure = (c: Context) =>
     c.req.header('x-forwarded-proto') === 'https' || new URL(c.req.url).protocol === 'https:';
 
-  const fail = (c: Context, status: 400 | 401 | 403 | 404 | 429 | 503, code: string, message: string) =>
+  const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 429 | 503, code: string, message: string) =>
     c.json({ error: { code, message } }, status);
 
   // Security headers for everything under /admin.
@@ -121,7 +124,7 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, devi
     signedIn: signedIn(c),
     labels: LABELS,
     levels: BROADCAST_LEVELS,
-    features: { reports: !!reports, accounts: !!accounts, broadcasts: !!broadcasts, zones: !!devices, push: !!push?.available },
+    features: { reports: !!reports, accounts: !!accounts, broadcasts: !!broadcasts, zones: !!devices, orgs: !!orgs, push: !!push?.available },
   }));
 
   // State-changing requests must say they come from the page.
@@ -321,23 +324,81 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, devi
     if (hours === null) return fail(c, 400, 'bad_hours', `It can stay active 1 to ${MAX_HOURS} hours.`);
     let sent = broadcasts!.add({ title, message, titleAr, messageAr, level, lat, lon, radiusKm, hours });
     // Instant: push to every phone whose zone overlaps the circle or whose last location is inside.
-    if (devices && push?.available) {
-      const to = devices.recipients({ lat, lon, radiusKm });
-      const result = await push.send(to.map((r) => {
-        const ar = r.lang === 'ar';
-        const where = r.zone ? (ar ? `منطقتك «${r.zone.name}»` : `Your zone "${r.zone.name}"`) : (ar ? 'موقعك الأخير' : 'Near your last location');
-        return {
-          token: r.token,
-          title: ar && titleAr ? titleAr : title,
-          body: `${ar && messageAr ? messageAr : message}\n${where}`,
-          data: { kind: 'broadcast', broadcastId: sent.id, level, ...(r.zone && { zoneId: r.zone.id }) },
-          urgent: level === 'danger',
-        };
-      }));
-      for (const t of result.invalidTokens) devices.dropToken(t);
-      sent = broadcasts!.setDelivery(sent.id, to.length, result.sent) ?? sent;
-    }
+    if (devices) sent = await deliver(sent, devices.recipients({ lat, lon, radiusKm }), { broadcasts: broadcasts!, devices, push });
     return c.json({ broadcast: sent }, 201);
+  });
+
+  // ---- Organizations: who they are, and whether they may alert the public ----
+  app.get('/admin/api/orgs', (c) => {
+    if (!orgs) return fail(c, 503, 'orgs_unavailable', 'Organizations are not enabled on this server.');
+    const list = orgs.all(500);
+    const owners = accounts?.byIds(list.flatMap((o) => (o.ownerId ? [o.ownerId] : []))) ?? new Map();
+    return c.json({
+      orgs: list.map(({ ownerId, ...o }) => ({ ...o, owner: ownerId ? owners.get(ownerId)?.email ?? null : null })),
+    });
+  });
+
+  app.post('/admin/api/orgs/:id/verified', async (c) => {
+    if (!orgs) return fail(c, 503, 'orgs_unavailable', 'Organizations are not enabled on this server.');
+    let body: { verified?: unknown };
+    try {
+      body = await c.req.json();
+    } catch {
+      return fail(c, 400, 'bad_body', 'Send {"verified": true|false}.');
+    }
+    if (typeof body.verified !== 'boolean') return fail(c, 400, 'bad_body', 'Send {"verified": true|false}.');
+    const org = orgs.setVerified(c.req.param('id'), body.verified);
+    if (!org) return fail(c, 404, 'not_found', 'No such organization.');
+    return c.json({ org });
+  });
+
+  /** A JSON object body, or null. */
+  const objectBody = async (c: Context): Promise<Record<string, unknown> | null> => {
+    try {
+      const b = await c.req.json();
+      return b && typeof b === 'object' && !Array.isArray(b) ? (b as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // A one-time link for an existing organization: a lost link, a new owner, a new member.
+  app.post('/admin/api/orgs/:id/invite', async (c) => {
+    if (!orgs) return fail(c, 503, 'orgs_unavailable', 'Organizations are not enabled on this server.');
+    const org = orgs.get(c.req.param('id'));
+    if (!org) return fail(c, 404, 'not_found', 'No such organization.');
+    const b = await objectBody(c);
+    const email = typeof b?.email === 'string' ? normalizeEmail(b.email) : null;
+    if (!email) return fail(c, 400, 'bad_email', 'Enter a valid email address.');
+    const role = (b?.role ?? 'owner') as OrgRole;
+    if (!ORG_ROLES.includes(role)) return fail(c, 400, 'bad_role', 'role must be owner or member.');
+    const { invite, token } = orgs.createInvite({ orgId: org.id, email, role });
+    return c.json({ invite, path: `/org/invite/${token}` }, 201);
+  });
+
+  // ---- Requests for access: approve one to create the organization and its owner's link ----
+  app.get('/admin/api/org-requests', (c) => {
+    if (!orgs) return fail(c, 503, 'orgs_unavailable', 'Organizations are not enabled on this server.');
+    return c.json({ requests: orgs.requests(500) });
+  });
+
+  app.post('/admin/api/org-requests/:id/approve', async (c) => {
+    if (!orgs) return fail(c, 503, 'orgs_unavailable', 'Organizations are not enabled on this server.');
+    const request = orgs.getRequest(c.req.param('id'));
+    if (!request) return fail(c, 404, 'not_found', 'No such request.');
+    if (request.status !== 'pending') return fail(c, 409, 'already_decided', `This request was already ${request.status}.`);
+    const b = await objectBody(c);
+    const org = orgs.create({ name: request.orgName, kind: request.kind, country: request.country, verified: b?.verified === true });
+    const { invite, token } = orgs.createInvite({ orgId: org.id, email: request.email, role: 'owner' });
+    return c.json({ request: orgs.decideRequest(request.id, 'approved', org.id), org, invite, path: `/org/invite/${token}` }, 201);
+  });
+
+  app.post('/admin/api/org-requests/:id/decline', (c) => {
+    if (!orgs) return fail(c, 503, 'orgs_unavailable', 'Organizations are not enabled on this server.');
+    const request = orgs.getRequest(c.req.param('id'));
+    if (!request) return fail(c, 404, 'not_found', 'No such request.');
+    if (request.status !== 'pending') return fail(c, 409, 'already_decided', `This request was already ${request.status}.`);
+    return c.json({ request: orgs.decideRequest(request.id, 'declined') });
   });
 
   app.post('/admin/api/broadcasts/:id/cancel', (c) => {

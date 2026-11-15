@@ -112,6 +112,8 @@ export interface DeviceStore {
   remove(installationId: string): boolean;
   /** Phones with a push token whose zone overlaps the circle, or whose fresh last location is inside it. */
   recipients(circle: { lat: number; lon: number; radiusKm: number }): Recipient[];
+  /** Every phone with a push token that is signed in to one of these accounts. */
+  tokensForUsers(userIds: string[]): Recipient[];
   /** FCM said this token is gone (app removed, token rotated). */
   dropToken(token: string): void;
   /** The most recently updated phone of each user, for the admin Users tab. */
@@ -201,6 +203,13 @@ export function createDeviceStore(dir: string, { now = Date.now }: { now?: () =>
         if (zone || here) out.push({ installationId: r.installation_id, token: r.token!, lang: r.lang === 'ar' ? 'ar' : 'en', zone });
       }
       return out;
+    },
+
+    tokensForUsers(userIds) {
+      if (userIds.length === 0) return [];
+      const rows = db.prepare(`SELECT installation_id, token, lang FROM devices WHERE token IS NOT NULL AND user_id IN (${userIds.map(() => '?').join(',')})`)
+        .all(...userIds) as unknown as { installation_id: string; token: string; lang: string }[];
+      return rows.map((r) => ({ installationId: r.installation_id, token: r.token, lang: r.lang === 'ar' ? 'ar' : 'en', zone: null }));
     },
 
     dropToken(token) {

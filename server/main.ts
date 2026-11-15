@@ -10,6 +10,8 @@ import { createService } from '../src/lib/service.ts';
 import { createAccountStore } from './accounts.ts';
 import { createBroadcastStore } from './broadcasts.ts';
 import { createDeviceStore } from './devices.ts';
+import { createOrgStore } from './orgs.ts';
+import { createOrgMonitor } from './org-monitor.ts';
 import { createPush, parseServiceAccount } from './push.ts';
 import { createAir } from './air.ts';
 import { createApp } from './app.ts';
@@ -48,6 +50,8 @@ const broadcasts = createBroadcastStore(storageDir);
 // Phones that turned on instant alerts, and Firebase Cloud Messaging to reach them.
 const devices = createDeviceStore(storageDir);
 const push = createPush({ account: parseServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT) });
+// Organizations and their sites.
+const orgs = createOrgStore(storageDir);
 const live = createLive();
 // Fire weather moisture codes are kept with the reports so restarts do not redo the run-up.
 const forecast = createForecast({ stateDir: path.join(storageDir, 'forecast') });
@@ -65,6 +69,7 @@ const app = createApp({
   broadcasts,
   devices,
   push,
+  orgs,
   authPer15Min: Number(process.env.AUTH_PER_15_MIN ?? 20),
   // Nearby water and escape routes: OpenStreetMap, Open-Meteo, OSRM (ORS_API_KEY optional).
   safety: createSafety({ cacheDir: path.join(storageDir, 'places') }),
@@ -81,6 +86,8 @@ serve({ fetch: app.fetch, port }, (info) => {
   if (!process.env.ADMIN_PASSWORD) console.log('admin: ADMIN_PASSWORD is not set, /admin is off');
   console.log(push.available ? `push: Firebase project ${push.projectId}` : 'push: FIREBASE_SERVICE_ACCOUNT is not set, zone alerts are not pushed');
   startRefresh(service);
+  // Organizations: a notification when a site needs action, and a morning digest.
+  if (app.orgBoard) createOrgMonitor({ orgs, board: app.orgBoard }).start();
   // Fire danger forecast: computed once now, then again on demand every few hours.
   if (process.env.FORECAST_WARM !== '0') setTimeout(() => void forecast.warm(), 5_000).unref();
   // Old reports are deleted daily.

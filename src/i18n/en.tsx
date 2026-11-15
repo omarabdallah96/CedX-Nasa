@@ -74,6 +74,7 @@ export const en = {
     loading: 'Loading Firesight…',
     placeNav: 'Place',
     howItWorks: 'How it works',
+    forOrgs: 'For organizations',
     wrong: 'Something went wrong',
     retry: 'Try again',
     nothing: 'Nothing to judge.',

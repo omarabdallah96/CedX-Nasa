@@ -158,6 +158,7 @@ export const ar: Strings = {
     loading: 'جارٍ تحميل Firesight…',
     placeNav: 'المكان',
     howItWorks: 'كيف يعمل',
+    forOrgs: 'للمؤسسات',
     wrong: 'حدث خطأ',
     retry: 'أعد المحاولة',
     nothing: 'لا شيء للحكم عليه.',
