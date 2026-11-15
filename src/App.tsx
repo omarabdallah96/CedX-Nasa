@@ -16,6 +16,7 @@ import { NowCard } from './components/NowCard.tsx';
 import { monthPeriod, PeriodPanel, type Period } from './components/PeriodPanel.tsx';
 import { Records } from './components/Records.tsx';
 import { SeasonChart } from './components/SeasonChart.tsx';
+import { IntroSkeleton, MainSkeleton, SideSkeleton, Sk } from './components/Skeleton.tsx';
 import { TrustPanel } from './components/TrustPanel.tsx';
 import { shortcuts, Verdict } from './components/Verdict.tsx';
 import { LangSwitch, useI18n } from './i18n/index.tsx';
@@ -90,6 +91,9 @@ export function App() {
         setIndex(i);
         setSummary(s);
         setStory(st);
+        // A link to a place that doesn't exist is corrected in place, so Back doesn't return to it.
+        const asked = readHash().slug;
+        if (asked && !i.countries.some((c) => c.slug === asked)) history.replaceState(null, '', `#/${i.countries[0].slug}`);
         setSlug((cur) => (i.countries.some((c) => c.slug === cur) ? cur : i.countries[0].slug));
       },
       (err: unknown) => alive && setBootError(err instanceof Error ? err.message : String(err)),
@@ -104,7 +108,8 @@ export function App() {
 
   useEffect(() => {
     const target = phase === 'tool' ? `#/${slug}` : '';
-    if (window.location.hash !== target) history.replaceState(null, '', target || window.location.pathname + window.location.search);
+    // A new history entry per page, so the browser's Back and Forward walk through them.
+    if (window.location.hash !== target) history.pushState(null, '', target || window.location.pathname + window.location.search);
     // 'instant' overrides the page's smooth scrolling: the tool must open at its top.
     if (phase === 'tool') window.scrollTo({ top: 0, behavior: 'instant' });
   }, [phase, slug]);
@@ -132,7 +137,8 @@ export function App() {
   }, [client, index, phase, key, attempt]);
 
   const cal = useMemo(() => (index ? buildCalendar(index.coverageEndDay + 1) : null), [index]);
-  const analysis = result?.data.analysis ?? null;
+  // A result for another country is never shown under this one's name: skeletons stand in until its own arrives.
+  const analysis = result?.key.startsWith(`${slug}|`) ? result.data.analysis : null;
   const stale = result !== null && result.key !== key;
 
   const sel: Selection | null = useMemo(() => {
@@ -169,9 +175,23 @@ export function App() {
     setBBox(null);
     setPicked(null);
     setRange(null);
+    setPoints(null);
     setDrawing(false);
     setPhase('tool');
   }, []);
+
+  // Back and Forward: show the page the URL now names.
+  useEffect(() => {
+    const onPop = () => {
+      const h = readHash();
+      if (!h.slug) {
+        setPhase('intro');
+        setGlobeView('spin');
+      } else if (!index || index.countries.some((c) => c.slug === h.slug)) open(h.slug);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [index, open]);
 
   // The four fields always show the box in use: the drawn one, or the country's own.
   const shownBox = bbox ?? country?.focus ?? null;
@@ -235,18 +255,20 @@ export function App() {
 
   return (
     <div className="app" data-phase={phase}>
-      {phase === 'tool' && index && (
+      {phase === 'tool' && (
         <header className="head">
           <a className="brand" href="#top" onClick={(e) => { e.preventDefault(); setPhase('intro'); setGlobeView('spin'); }}>
             <img src="./favicon.svg" alt="" width={26} height={26} />
             <span lang="en">{t.brand}</span>
           </a>
           <nav className="places-nav" aria-label={t.app.placeNav}>
-            {index.countries.map((c) => (
-              <button key={c.slug} type="button" aria-pressed={c.slug === slug} onClick={() => open(c.slug)}>{t.country(c.slug, c.name)}</button>
-            ))}
+            {index
+              ? index.countries.map((c) => (
+                <button key={c.slug} type="button" aria-pressed={c.slug === slug} onClick={() => open(c.slug)}>{t.country(c.slug, c.name)}</button>
+              ))
+              : [72, 64, 80, 76].map((w, i) => <Sk key={i} w={w} h={40} r={999} />)}
           </nav>
-          <a className="head-link" href="#trust">{t.app.howItWorks}</a>
+          <a className="head-link" href="#trust" onClick={(e) => { e.preventDefault(); document.getElementById('trust')?.scrollIntoView(); }}>{t.app.howItWorks}</a>
           <ThemeSwitch />
           <LangSwitch />
         </header>
@@ -269,6 +291,14 @@ export function App() {
             dataUrl={source?.url ?? client.baseUrl}
           />
         )}
+        {phase === 'tool' && !index && (
+          <>
+            <div className="map" data-phase="tool" aria-hidden="true" />
+            <aside className="side" aria-busy="true">
+              <SideSkeleton label={t.app.reading(null)} />
+            </aside>
+          </>
+        )}
         {phase === 'tool' && index && cal && (
           <aside className="side" aria-busy={!analysis || stale}>
             {error ? (
@@ -286,10 +316,7 @@ export function App() {
             ) : analysis && sel ? (
               <Verdict analysis={analysis} cal={cal} sel={sel} onSelect={select} place={place} />
             ) : (
-              <div className="verdict">
-                <p className="eyebrow">{countryName}</p>
-                <p className="verdict-text">{t.app.reading(country ? country.n : null)}</p>
-              </div>
+              <SideSkeleton eyebrow={countryName} label={t.app.reading(country ? country.n : null)} />
             )}
 
             {analysis && week && !empty && !error && (
@@ -365,9 +392,9 @@ export function App() {
               <p className="map-key">
                 <span><i className="pt pt-viirs" /> VIIRS</span>
                 <span><i className="pt pt-modis" /> MODIS</span>
-                <span>
-                  {period && points ? t.area.onMap(points.total, points.lon.length, t.rangeName(period.from, period.to)) : ''}
-                </span>
+                {period && points
+                  ? <span>{t.area.onMap(points.total, points.lon.length, t.rangeName(period.from, period.to))}</span>
+                  : !error && <Sk w={170} h={12} />}
                 <span><i className="glow" /> {t.area.footprint}</span>
               </p>
             </form>
@@ -376,7 +403,8 @@ export function App() {
       </div>
 
       {phase === 'intro' && summary && story && cal && <Intro summary={summary} story={story} cal={cal} onView={setGlobeView} onOpen={open} />}
-      {phase === 'intro' && !(summary && story && cal) && <p className="boot">{t.app.loading}</p>}
+      {phase === 'intro' && !(summary && story && cal) && <IntroSkeleton label={t.app.loading} />}
+      {phase === 'tool' && !analysis && !error && <MainSkeleton />}
 
       {phase === 'tool' && index && cal && (
         <>

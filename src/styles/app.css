@@ -98,7 +98,7 @@ strong { font-weight: 600; color: var(--ink); }
   .facts dd + dt { margin-top: 8px; }
 }
 .lede { max-width: 68ch; color: var(--ink-2); }
-.boot, .fatal { padding: 20vh var(--gutter); text-align: center; color: var(--ink-2); }
+.fatal { padding: 20vh var(--gutter); text-align: center; color: var(--ink-2); }
 .fatal h1 { font: 500 32px var(--display); margin-bottom: 12px; color: var(--ink); }
 
 /* ---------- Buttons and controls ---------- */
@@ -646,6 +646,14 @@ td.cal-total { position: relative; white-space: nowrap; }
   .downloads li { grid-template-columns: minmax(0, 1fr); }
   .rec-name small { display: none; }
 }
+
+/* ---------- Loading skeletons ---------- */
+/* Ink at low strength reads on both themes; the pulse is opacity only, and reduced motion leaves it still. */
+.sk { display: block; flex: none; max-width: 100%; border-radius: 6px; background: color-mix(in srgb, var(--ink) 10%, transparent); animation: sk 0.9s ease-in-out infinite alternate; }
+@keyframes sk { to { opacity: 0.45; } }
+.sk-group { display: grid; gap: 12px; }
+.sk-hero { width: 100%; font-size: clamp(52px, min(11vw, 20vh), 148px); }
+.sk-hero .note { margin-top: 8px; }
 
 /* ---------- Arabic ---------- */
 /* Layout mirrors through the logical properties above; these rules are what the script itself needs. */
