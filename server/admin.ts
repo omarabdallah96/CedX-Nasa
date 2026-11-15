@@ -12,6 +12,8 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from './admin-page.ts';
 import { createRateLimit } from './ratelimit.ts';
 import { LABELS, type ReportStore } from './reports.ts';
+import { normalizeEmail, PLANS, type AccountStore, type Plan } from './accounts.ts';
+import { BROADCAST_LEVELS, MAX_HOURS, MAX_MESSAGE, MAX_RADIUS_KM, MAX_TITLE, type BroadcastLevel, type BroadcastStore } from './broadcasts.ts';
 
 const COOKIE = 'firesight_admin';
 const SESSION_MS = 12 * 3_600_000;
@@ -20,6 +22,10 @@ export interface AdminOptions {
   /** Empty or missing turns the admin off (the page says so). */
   password?: string;
   reports?: ReportStore;
+  /** User accounts: the Users tab sets plans. */
+  accounts?: AccountStore;
+  /** Zone alerts sent to phones. */
+  broadcasts?: BroadcastStore;
   /** Who is asking, for the login limiter. */
   clientKey: (c: Context) => string;
   now?: () => number;
@@ -31,7 +37,7 @@ function sameSecret(a: string, b: string) {
   return timingSafeEqual(sha256(a), sha256(b));
 }
 
-export function createAdmin({ password = '', reports, clientKey, now = Date.now }: AdminOptions) {
+export function createAdmin({ password = '', reports, accounts, broadcasts, clientKey, now = Date.now }: AdminOptions) {
   const app = new Hono();
   const configured = password.length > 0;
   const key = sha256(`firesight-admin-session:${password}`);
@@ -73,7 +79,13 @@ export function createAdmin({ password = '', reports, clientKey, now = Date.now 
   app.get('/admin/app.js', (c) => c.body(ADMIN_JS, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }));
   app.get('/admin/app.css', (c) => c.body(ADMIN_CSS, 200, { 'Content-Type': 'text/css; charset=utf-8' }));
 
-  app.get('/admin/api/session', (c) => c.json({ configured, signedIn: signedIn(c), labels: LABELS }));
+  app.get('/admin/api/session', (c) => c.json({
+    configured,
+    signedIn: signedIn(c),
+    labels: LABELS,
+    levels: BROADCAST_LEVELS,
+    features: { accounts: !!accounts, broadcasts: !!broadcasts },
+  }));
 
   // State-changing requests must say they come from the page.
   app.use('/admin/*', async (c, next) => {
@@ -119,7 +131,12 @@ export function createAdmin({ password = '', reports, clientKey, now = Date.now 
   // Everything below needs a session.
   app.use('/admin/api/*', async (c, next) => {
     if (!signedIn(c)) return fail(c, 401, 'signed_out', 'Sign in first.');
-    if (!reports) return fail(c, 503, 'reports_unavailable', 'Reports are not enabled on this server.');
+    const p = c.req.path;
+    if (!reports && /^\/admin\/api\/(stats|reports|devices)/.test(p)) {
+      return fail(c, 503, 'reports_unavailable', 'Reports are not enabled on this server.');
+    }
+    if (!accounts && p.startsWith('/admin/api/users')) return fail(c, 503, 'accounts_unavailable', 'Accounts are not enabled.');
+    if (!broadcasts && p.startsWith('/admin/api/broadcasts')) return fail(c, 503, 'broadcasts_unavailable', 'Zone alerts are not enabled.');
     await next();
   });
 
@@ -169,6 +186,72 @@ export function createAdmin({ password = '', reports, clientKey, now = Date.now 
   app.delete('/admin/api/reports/:id', async (c) => {
     if (!(await reports!.adminRemove(c.req.param('id')))) return fail(c, 404, 'not_found', 'No such report.');
     return c.json({ deleted: true });
+  });
+
+  // ---- Users: find an account, change its plan ----
+  app.get('/admin/api/users', (c) => {
+    const q = (c.req.query('q') ?? '').slice(0, 100);
+    return c.json(accounts!.search(q, 50));
+  });
+
+  app.post('/admin/api/users/plan', async (c) => {
+    let body: { email?: unknown; plan?: unknown };
+    try {
+      body = await c.req.json();
+    } catch {
+      return fail(c, 400, 'bad_body', 'Send {"email", "plan"}.');
+    }
+    const email = typeof body.email === 'string' ? normalizeEmail(body.email) : null;
+    if (!email) return fail(c, 400, 'bad_email', 'Enter a valid email address.');
+    if (!(PLANS as readonly unknown[]).includes(body.plan)) return fail(c, 400, 'bad_plan', `plan must be ${PLANS.join(' or ')}.`);
+    const user = accounts!.setPlan(email, body.plan as Plan);
+    if (!user) return fail(c, 404, 'not_found', 'No account with this email. The person must sign up in the app first.');
+    return c.json({ user });
+  });
+
+  // ---- Zone alerts: a message for phones whose zone overlaps a circle ----
+  app.get('/admin/api/broadcasts', (c) => c.json({ broadcasts: broadcasts!.recent(50), now: new Date(now()).toISOString() }));
+
+  app.post('/admin/api/broadcasts', async (c) => {
+    let b: Record<string, unknown>;
+    try {
+      b = await c.req.json();
+    } catch {
+      return fail(c, 400, 'bad_body', 'Send JSON.');
+    }
+    const text = (k: string, max: number, required: boolean) => {
+      const v = typeof b[k] === 'string' ? (b[k] as string).trim() : '';
+      if ((required && !v) || v.length > max) return null;
+      return v;
+    };
+    const num = (k: string, min: number, max: number) => {
+      const v = Number(b[k]);
+      return Number.isFinite(v) && v >= min && v <= max ? v : null;
+    };
+    const title = text('title', MAX_TITLE, true);
+    const message = text('message', MAX_MESSAGE, true);
+    const titleAr = text('titleAr', MAX_TITLE, false);
+    const messageAr = text('messageAr', MAX_MESSAGE, false);
+    if (title === null || message === null || titleAr === null || messageAr === null) {
+      return fail(c, 400, 'bad_text', `A title (up to ${MAX_TITLE} characters) and a message (up to ${MAX_MESSAGE}) are required.`);
+    }
+    const level = b.level as BroadcastLevel;
+    if (!BROADCAST_LEVELS.includes(level)) return fail(c, 400, 'bad_level', `level must be ${BROADCAST_LEVELS.join(', ')}.`);
+    const lat = num('lat', -90, 90);
+    const lon = num('lon', -180, 180);
+    const radiusKm = num('radiusKm', 0.5, MAX_RADIUS_KM);
+    const hours = num('hours', 1, MAX_HOURS);
+    if (lat === null || lon === null) return fail(c, 400, 'bad_place', 'Latitude and longitude must be decimal degrees.');
+    if (radiusKm === null) return fail(c, 400, 'bad_radius', `The radius must be 0.5 to ${MAX_RADIUS_KM} km.`);
+    if (hours === null) return fail(c, 400, 'bad_hours', `It can stay active 1 to ${MAX_HOURS} hours.`);
+    const sent = broadcasts!.add({ title, message, titleAr, messageAr, level, lat, lon, radiusKm, hours });
+    return c.json({ broadcast: sent }, 201);
+  });
+
+  app.post('/admin/api/broadcasts/:id/cancel', (c) => {
+    const b = broadcasts!.cancel(c.req.param('id'));
+    if (!b) return fail(c, 404, 'not_found', 'No such alert.');
+    return c.json({ broadcast: b });
   });
 
   return app;

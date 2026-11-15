@@ -16,10 +16,15 @@ export const MAX_EMAIL = 254;
 /** A session lasts this long after it was last used. */
 export const SESSION_DAYS = 180;
 
+/** 'pro' unlocks paid features in the app (unlimited alert zones, zone reports). */
+export const PLANS = ['free', 'pro'] as const;
+export type Plan = (typeof PLANS)[number];
+
 export interface User {
   id: string;
   email: string;
   name: string;
+  plan: Plan;
   createdAt: string;
 }
 
@@ -28,6 +33,7 @@ interface UserRow {
   email: string;
   name: string;
   password_hash: string;
+  plan: string;
   created_at: string;
 }
 
@@ -39,7 +45,13 @@ export class AccountError extends Error {
   }
 }
 
-const toUser = (r: UserRow): User => ({ id: r.id, email: r.email, name: r.name, createdAt: r.created_at });
+const toUser = (r: UserRow): User => ({
+  id: r.id,
+  email: r.email,
+  name: r.name,
+  plan: r.plan === 'pro' ? 'pro' : 'free',
+  createdAt: r.created_at,
+});
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
 /** Trims and lower-cases; returns null when it does not look like an email. */
@@ -81,6 +93,10 @@ export interface AccountStore {
   authenticate(token: string): User | null;
   logout(token: string): void;
   updateName(userId: string, name: string): User | null;
+  /** Newest first; `query` matches part of the email. For the admin page. */
+  search(query: string, limit: number): { users: User[]; total: number };
+  /** Sets the plan by email (admin, or a payment webhook later). Null when there is no such account. */
+  setPlan(email: string, plan: Plan): User | null;
   /** Deletes the account and every session of it. */
   remove(userId: string): boolean;
   /** Removes expired sessions; returns how many. */
@@ -113,6 +129,9 @@ export function createAccountStore(dir: string, { now = Date.now }: { now?: () =
     CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
     CREATE INDEX IF NOT EXISTS sessions_expires ON sessions (expires_at);
   `);
+  // Columns added after the first release.
+  const columns = new Set((db.prepare('PRAGMA table_info(users)').all() as unknown as { name: string }[]).map((c) => c.name));
+  if (!columns.has('plan')) db.exec(`ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'`);
 
   const userByEmail = db.prepare('SELECT * FROM users WHERE email = ?');
   const userById = db.prepare('SELECT * FROM users WHERE id = ?');
@@ -169,6 +188,19 @@ export function createAccountStore(dir: string, { now = Date.now }: { now?: () =
     updateName(userId, name) {
       db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, userId);
       const row = userById.get(userId) as UserRow | undefined;
+      return row ? toUser(row) : null;
+    },
+
+    search(query, limit) {
+      const like = `%${query.trim().toLowerCase().replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+      const rows = db.prepare(`SELECT * FROM users WHERE email LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`).all(like, limit);
+      const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM users WHERE email LIKE ? ESCAPE '\\'`).get(like) as { n: number }).n);
+      return { users: (rows as unknown as UserRow[]).map(toUser), total };
+    },
+
+    setPlan(email, plan) {
+      db.prepare('UPDATE users SET plan = ? WHERE email = ?').run(plan, email);
+      const row = userByEmail.get(email) as UserRow | undefined;
       return row ? toUser(row) : null;
     },
 
