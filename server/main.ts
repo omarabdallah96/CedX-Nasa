@@ -16,6 +16,7 @@ import { createForecast } from './forecast.ts';
 import { createLive } from './live.ts';
 import { startRefresh } from './refresh.ts';
 import { createReportStore } from './reports.ts';
+import { createSafety } from './safety.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = path.join(root, 'public', 'data');
@@ -64,6 +65,9 @@ const app = createApp({
   devices,
   push,
   authPer15Min: Number(process.env.AUTH_PER_15_MIN ?? 20),
+  // Nearby water and escape routes: OpenStreetMap, Open-Meteo, OSRM (ORS_API_KEY optional).
+  safety: createSafety({ cacheDir: path.join(storageDir, 'places') }),
+  escapesPer10Min: Number(process.env.ESCAPES_PER_10_MIN ?? 40),
 });
 const port = Number(process.env.PORT) || 8787;
 

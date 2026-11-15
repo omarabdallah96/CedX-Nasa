@@ -14,6 +14,7 @@ import { LiveUnavailableError, MAX_HOURS, type Live } from './live.ts';
 import { DANGER_CLASSES, dangerLevel } from './fwi.ts';
 import { FORECAST_DAYS, ForecastUnavailableError, nearestCell, type CountryForecast, type Forecast } from './forecast.ts';
 import { createRateLimit } from './ratelimit.ts';
+import { MAX_FIRES, MAX_RESOURCE_KM, SafetyUnavailableError, type Safety } from './safety.ts';
 import { createAdmin } from './admin.ts';
 import type { BroadcastStore } from './broadcasts.ts';
 import { MAX_ZONES, type AccountZone, type DeviceStore, type DeviceZone } from './devices.ts';
@@ -103,6 +104,10 @@ export interface AppOptions {
   /** Phones registered for instant (push) alerts; /devices answers 503 without it. */
   devices?: DeviceStore;
   push?: Push;
+  /** Nearby water and services, and escape routes; /resources and /escape answer 503 without it. */
+  safety?: Safety;
+  /** Escape route requests per client per 10 minutes (each one asks outside services). */
+  escapesPer10Min?: number;
 }
 
 /** Arabic names, from pipeline/config.mjs. */
@@ -129,7 +134,7 @@ function clientKey(c: Context): string {
   }
 }
 
-export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts, devices, push }: AppOptions) {
+export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts, devices, push, safety, escapesPer10Min = 40 }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
@@ -270,6 +275,8 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
         'DELETE /api/v1/devices/{installationId}',
         'GET /api/v1/me/zones         (Authorization: Bearer <token>)  alert zones saved to the account',
         'PUT /api/v1/me/zones         {zones}  (Authorization: Bearer <token>)',
+        'GET /api/v1/resources?lat=&lon=&radiusKm=   water, fire stations, hospitals, assembly points (OpenStreetMap)',
+        'GET /api/v1/escape?lat=&lon=&fires=lat,lon;lat,lon   routes away from the fires, downwind danger areas',
       ],
     });
   });
@@ -553,6 +560,81 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
       note: 'Near-real-time detections are not filtered for industrial sites and can still be revised by NASA.',
       count: answer.hotspots.length,
       hotspots: answer.hotspots,
+    });
+  });
+
+  // ---- Safety: nearby resources and escape routes ----
+  const SAFETY_SOURCE = 'Places: OpenStreetMap contributors (Overpass API). Wind: Open-Meteo. Routes: ';
+  const SAFETY_NOTE = 'A planning aid only. Follow evacuation orders from civil defence and the fire service first. Roads can be closed or blocked by the fire.';
+
+  function point(query: Record<string, string>): { lat: number; lon: number } {
+    const lat = Number(query.lat);
+    const lon = Number(query.lon);
+    if (query.lat === undefined || query.lon === undefined || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      throw new ApiError(400, 'bad_parameter', 'lat and lon are required, in decimal degrees.');
+    }
+    return { lat, lon };
+  }
+
+  function needSafety(): Safety {
+    if (!safety) throw new ApiError(503, 'safety_unavailable', 'Resources and escape routes are not enabled on this server.');
+    return safety;
+  }
+
+  function safetyError(err: unknown): never {
+    if (err instanceof SafetyUnavailableError) throw new ApiError(503, 'safety_unavailable', `${err.message} Try again in a few minutes.`);
+    throw err;
+  }
+
+  api.get('/resources', async (c) => {
+    const query = c.req.query();
+    const at = point(query);
+    const radiusKm = query.radiusKm === undefined ? 10 : Number(query.radiusKm);
+    if (!Number.isFinite(radiusKm) || radiusKm < 0.5 || radiusKm > MAX_RESOURCE_KM) {
+      throw new ApiError(400, 'bad_parameter', `radiusKm must be from 0.5 to ${MAX_RESOURCE_KM}.`);
+    }
+    const resources = await needSafety().resources(at, radiusKm).catch(safetyError);
+    c.header('Cache-Control', 'public, max-age=3600');
+    return c.json({
+      center: at,
+      radiusKm,
+      source: 'OpenStreetMap contributors (Overpass API)',
+      count: resources.length,
+      resources,
+    });
+  });
+
+  const escapeLimit = escapesPer10Min > 0 ? createRateLimit({ limit: escapesPer10Min, windowMs: 10 * 60_000 }) : null;
+  api.get('/escape', async (c) => {
+    const query = c.req.query();
+    const from = point(query);
+    const s = needSafety();
+    const fires: { lat: number; lon: number }[] = [];
+    if (query.fires) {
+      for (const pair of query.fires.split(';')) {
+        if (!pair.trim()) continue;
+        const [la, lo] = pair.split(',').map(Number);
+        if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) {
+          throw new ApiError(400, 'bad_parameter', 'fires must be lat,lon pairs separated by ";".');
+        }
+        fires.push({ lat: la, lon: lo });
+      }
+      if (fires.length > MAX_FIRES) throw new ApiError(400, 'bad_parameter', `At most ${MAX_FIRES} fires.`);
+    }
+    if (escapeLimit) {
+      const wait = escapeLimit.take(clientKey(c));
+      if (wait > 0) {
+        c.header('Retry-After', String(wait));
+        throw new ApiError(429, 'rate_limited', `Too many route requests. Try again in ${wait} seconds.`);
+      }
+    }
+    const plan = await s.escape(from, fires).catch(safetyError);
+    c.header('Cache-Control', 'public, max-age=300');
+    return c.json({
+      ...plan,
+      fires: fires.length,
+      source: SAFETY_SOURCE + s.routingProvider,
+      note: SAFETY_NOTE,
     });
   });
 
