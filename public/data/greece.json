@@ -2,11 +2,11 @@
  "slug": "greece",
  "name": "Greece",
  "iso": "GRC",
- "n": 145112,
+ "n": 145158,
  "counts": {
   "modis": 47192,
   "viirs-snpp": 94094,
-  "viirs-noaa20": 3826
+  "viirs-noaa20": 3872
  },
  "bbox": [
   19.657,
@@ -21,9 +21,9 @@
   41.29
  ],
  "firstDay": 305,
- "lastDay": 9813,
+ "lastDay": 9814,
  "epoch": "2000-01-01",
- "bytes": 2612016,
+ "bytes": 2612844,
  "missingFiles": [],
  "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Greece.csv"
 }

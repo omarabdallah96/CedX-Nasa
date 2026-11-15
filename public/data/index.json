@@ -1,8 +1,8 @@
 {
  "epoch": "2000-01-01",
- "generatedAt": "2026-11-14T11:13:41.854Z",
- "coverageEndDay": 9813,
- "coverageEnd": "2026-11-13",
+ "generatedAt": "2026-11-15T10:02:17.754Z",
+ "coverageEndDay": 9814,
+ "coverageEnd": "2026-11-14",
  "recentFromDay": 9497,
  "snppEndDay": 9802,
  "nrtFromDay": {
@@ -73,11 +73,11 @@
    "slug": "portugal",
    "name": "Portugal",
    "iso": "PRT",
-   "n": 200948,
+   "n": 200951,
    "counts": {
     "modis": 79055,
     "viirs-snpp": 116219,
-    "viirs-noaa20": 5674
+    "viirs-noaa20": 5677
    },
    "bbox": [
     -28.818,
@@ -92,9 +92,9 @@
     41.965
    ],
    "firstDay": 310,
-   "lastDay": 9813,
+   "lastDay": 9814,
    "epoch": "2000-01-01",
-   "bytes": 3617064,
+   "bytes": 3617118,
    "missingFiles": [],
    "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Portugal.csv"
   },
@@ -102,11 +102,11 @@
    "slug": "greece",
    "name": "Greece",
    "iso": "GRC",
-   "n": 145112,
+   "n": 145158,
    "counts": {
     "modis": 47192,
     "viirs-snpp": 94094,
-    "viirs-noaa20": 3826
+    "viirs-noaa20": 3872
    },
    "bbox": [
     19.657,
@@ -121,9 +121,9 @@
     41.29
    ],
    "firstDay": 305,
-   "lastDay": 9813,
+   "lastDay": 9814,
    "epoch": "2000-01-01",
-   "bytes": 2612016,
+   "bytes": 2612844,
    "missingFiles": [],
    "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Greece.csv"
   },
@@ -131,11 +131,11 @@
    "slug": "lebanon",
    "name": "Lebanon",
    "iso": "LBN",
-   "n": 13490,
+   "n": 13492,
    "counts": {
     "modis": 2318,
     "viirs-snpp": 10558,
-    "viirs-noaa20": 614
+    "viirs-noaa20": 616
    },
    "bbox": [
     35.109,
@@ -150,9 +150,9 @@
     34.613
    ],
    "firstDay": 317,
-   "lastDay": 9812,
+   "lastDay": 9814,
    "epoch": "2000-01-01",
-   "bytes": 242820,
+   "bytes": 242856,
    "missingFiles": [],
    "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Lebanon.csv"
   },

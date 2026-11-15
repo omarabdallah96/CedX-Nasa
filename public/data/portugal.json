@@ -2,11 +2,11 @@
  "slug": "portugal",
  "name": "Portugal",
  "iso": "PRT",
- "n": 200948,
+ "n": 200951,
  "counts": {
   "modis": 79055,
   "viirs-snpp": 116219,
-  "viirs-noaa20": 5674
+  "viirs-noaa20": 5677
  },
  "bbox": [
   -28.818,
@@ -21,9 +21,9 @@
   41.965
  ],
  "firstDay": 310,
- "lastDay": 9813,
+ "lastDay": 9814,
  "epoch": "2000-01-01",
- "bytes": 3617064,
+ "bytes": 3617118,
  "missingFiles": [],
  "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Portugal.csv"
 }

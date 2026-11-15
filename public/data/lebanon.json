@@ -2,11 +2,11 @@
  "slug": "lebanon",
  "name": "Lebanon",
  "iso": "LBN",
- "n": 13490,
+ "n": 13492,
  "counts": {
   "modis": 2318,
   "viirs-snpp": 10558,
-  "viirs-noaa20": 614
+  "viirs-noaa20": 616
  },
  "bbox": [
   35.109,
@@ -21,9 +21,9 @@
   34.613
  ],
  "firstDay": 317,
- "lastDay": 9812,
+ "lastDay": 9814,
  "epoch": "2000-01-01",
- "bytes": 242820,
+ "bytes": 242856,
  "missingFiles": [],
  "source": "https://firms.modaps.eosdis.nasa.gov/data/country/{sensor}/{year}/{sensor}_{year}_Lebanon.csv"
 }
