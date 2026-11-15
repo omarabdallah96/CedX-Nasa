@@ -1,7 +1,7 @@
 // Keeps the record current: pulls the newest days from FIRMS and repacks.
 // Only runs when FIRMS_MAP_KEY is set; without it the server serves what is on disk.
 import { run as fetchRecent } from '../pipeline/fetch-recent.mjs';
-import { run as pack } from '../pipeline/pack.mjs';
+import { missingArchive, run as pack } from '../pipeline/pack.mjs';
 import { run as summarize } from '../pipeline/summarize.ts';
 import type { Service } from '../src/lib/service.ts';
 
@@ -13,11 +13,19 @@ export function startRefresh(service: Service, { everyHours = 6, log = console.l
     return { stop() {}, runNow: async () => false };
   }
   let running = false;
+  let archiveChecked: Promise<boolean> | null = null;
 
   async function runNow(): Promise<boolean> {
     if (running) return false;
     running = true;
     try {
+      // Without the yearly archive (data/raw is not in the image) a repack would
+      // zero every year before the API data. Keep the packed record instead.
+      archiveChecked ??= missingArchive().then((m) => {
+        if (m.length) log(`refresh: ${m.length} yearly archive files are missing, so the record is not repacked here; serving the packed files as they are`);
+        return m.length === 0;
+      });
+      if (!(await archiveChecked)) return false;
       const quiet = () => {};
       const result = await fetchRecent({ log });
       if (result.skipped) return false;

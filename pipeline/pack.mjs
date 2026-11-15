@@ -13,7 +13,7 @@
 // flags: bit0 sensor (0 MODIS, 1 VIIRS) · bit1 night · bits2-3 satellite
 //        (0 Terra, 1 Aqua, 2 Suomi-NPP, 3 NOAA-20) · bits4-5 FIRMS `type` (0-3)
 // confidence: MODIS 0-100 as published; VIIRS low/nominal/high stored as 10/50/90.
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { API_DIR, COUNTRIES, SENSORS, OUT_DIR, EPOCH_UTC, rawPath, FIRMS_BASE } from './config.mjs';
@@ -86,7 +86,37 @@ async function readJson(file) {
   }
 }
 
-export async function run({ log = console.log } = {}) {
+/** Yearly archive files that are not on disk. */
+export async function missingArchive() {
+  const missing = [];
+  for (const country of COUNTRIES) {
+    for (const s of SENSORS) {
+      for (let year = s.from; year <= s.to; year++) {
+        const file = rawPath(s.id, year, country.firms);
+        try {
+          await stat(file);
+        } catch {
+          missing.push(path.relative(process.cwd(), file));
+        }
+      }
+    }
+  }
+  return missing;
+}
+
+/**
+ * Packs every country. Refuses to run when yearly archive files are missing:
+ * packing without them would write a record with every year before the API
+ * data at zero, over a good one. Pass allowMissing to pack anyway.
+ */
+export async function run({ log = console.log, allowMissing = process.env.PACK_ALLOW_MISSING === '1' } = {}) {
+  const absent = await missingArchive();
+  if (absent.length && !allowMissing) {
+    throw new Error(
+      `${absent.length} yearly archive files are missing (first: ${absent[0]}). ` +
+        'Run "npm run data:fetch" first, or set PACK_ALLOW_MISSING=1 to pack without them.',
+    );
+  }
   await mkdir(OUT_DIR, { recursive: true });
   const index = [];
   const recent = await readJson(path.join(API_DIR, 'manifest.json'));
