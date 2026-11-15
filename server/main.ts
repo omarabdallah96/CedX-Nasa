@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import type { DatasetIndex } from '../src/lib/analysis.ts';
 import { createService } from '../src/lib/service.ts';
+import { createAccountStore } from './accounts.ts';
 import { createApp } from './app.ts';
 import { createForecast } from './forecast.ts';
 import { createLive } from './live.ts';
@@ -35,6 +36,8 @@ const service = createService({
 });
 
 const reports = createReportStore(storageDir);
+// Optional sign-in for the phone app, in the same storage volume.
+const accounts = createAccountStore(storageDir);
 const live = createLive();
 // Fire weather moisture codes are kept with the reports so restarts do not redo the run-up.
 const forecast = createForecast({ stateDir: path.join(storageDir, 'forecast') });
@@ -48,6 +51,8 @@ const app = createApp({
   requestsPer10Min: Number(process.env.RATE_LIMIT_PER_10_MIN ?? 1200),
   reportsPerHour: Number(process.env.REPORTS_PER_HOUR ?? 30),
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
+  accounts,
+  authPer15Min: Number(process.env.AUTH_PER_15_MIN ?? 20),
 });
 const port = Number(process.env.PORT) || 8787;
 
@@ -63,4 +68,7 @@ serve({ fetch: app.fetch, port }, (info) => {
   const prune = () => reports.prune().then((n) => n && console.log(`reports: removed ${n} older than 90 days`), console.error);
   void prune();
   setInterval(prune, 86_400_000).unref();
+  // Expired sign-in sessions too.
+  accounts.prune();
+  setInterval(() => accounts.prune(), 86_400_000).unref();
 });

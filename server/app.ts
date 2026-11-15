@@ -15,6 +15,7 @@ import { DANGER_CLASSES, dangerLevel } from './fwi.ts';
 import { FORECAST_DAYS, ForecastUnavailableError, nearestCell, type CountryForecast, type Forecast } from './forecast.ts';
 import { createRateLimit } from './ratelimit.ts';
 import { createAdmin } from './admin.ts';
+import { AccountError, MAX_NAME, MAX_PASSWORD, MIN_PASSWORD, normalizeEmail, type AccountStore, type User } from './accounts.ts';
 import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
 import { lastWeek, rangeSummary, selectionVerdict, type RangeSummary } from '../src/lib/analysis.ts';
 import { parseBox } from '../src/lib/coords.ts';
@@ -27,7 +28,7 @@ import { FIRST_DAY, isoDate, MONTHS_LONG, parseIsoDate, spanName } from '../src/
 export const UNIT = 'active-fire cell-days, VIIRS-equivalent (one ~1 km grid cell with fire on one day)';
 const MAX_JSON_HOTSPOTS = 20_000;
 
-type ErrorStatus = 400 | 403 | 404 | 413 | 429 | 503;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 429 | 503;
 
 class ApiError extends Error {
   status: ErrorStatus;
@@ -90,6 +91,10 @@ export interface AppOptions {
   reportsPerHour?: number;
   /** Password for the /admin moderation page; empty turns it off. */
   adminPassword?: string;
+  /** User accounts for the phone app; the /auth endpoints answer 503 without it. */
+  accounts?: AccountStore;
+  /** Sign-in and sign-up attempts per client per 15 minutes. */
+  authPer15Min?: number;
 }
 
 /** Arabic names, from pipeline/config.mjs. */
@@ -116,14 +121,14 @@ function clientKey(c: Context): string {
   }
 }
 
-export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword }: AppOptions) {
+export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20 }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
   api.use('*', cors({
     origin: '*',
-    allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'X-Report-Token'],
+    allowMethods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'X-Report-Token', 'Authorization'],
     maxAge: 86400,
   }));
   if (requestsPer10Min > 0) {
@@ -246,6 +251,12 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
         'GET /api/v1/reports/{id}',
         'GET /api/v1/reports/{id}/photo',
         'DELETE /api/v1/reports/{id}   (X-Report-Token header)',
+        'POST /api/v1/auth/register   {email, password, name?}',
+        'POST /api/v1/auth/login      {email, password}',
+        'GET /api/v1/auth/me          (Authorization: Bearer <token>)',
+        'PATCH /api/v1/auth/me        {name}',
+        'POST /api/v1/auth/logout',
+        'DELETE /api/v1/auth/me       {password}',
       ],
     });
   });
@@ -811,6 +822,120 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     const result = await needReports().remove(c.req.param('id'), token);
     if (result === 'not_found') throw new ApiError(404, 'not_found', 'No such report.');
     if (result === 'forbidden') throw new ApiError(403, 'forbidden', 'This token does not match the report.');
+    return c.json({ deleted: true });
+  });
+
+  // ---- Accounts (optional: the app works as a guest) ----
+  const authLimiter = createRateLimit({ limit: authPer15Min, windowMs: 15 * 60_000 });
+  const needAccounts = () => {
+    if (!accounts) throw new ApiError(503, 'accounts_unavailable', 'Accounts are not enabled on this server.');
+    return accounts;
+  };
+  const limitAuth = (c: Context) => {
+    const wait = authLimiter.take(clientKey(c));
+    if (wait > 0) {
+      c.header('Retry-After', String(wait));
+      throw new ApiError(429, 'rate_limited', `Too many attempts. Try again in ${Math.ceil(wait / 60)} minutes.`);
+    }
+  };
+  async function jsonBody(c: Context): Promise<Record<string, unknown>> {
+    try {
+      const body = await c.req.json();
+      if (body && typeof body === 'object' && !Array.isArray(body)) return body as Record<string, unknown>;
+    } catch {
+      // Falls through.
+    }
+    throw new ApiError(400, 'bad_body', 'Send a JSON object.');
+  }
+  const bearer = (c: Context) => {
+    const m = /^Bearer\s+([A-Za-z0-9_-]{20,100})$/.exec(c.req.header('authorization') ?? '');
+    return m ? m[1] : null;
+  };
+  /** The signed-in user, or a 401. */
+  function signedIn(c: Context): User {
+    const store = needAccounts();
+    const token = bearer(c);
+    const user = token ? store.authenticate(token) : null;
+    if (!user) throw new ApiError(401, 'signed_out', 'Sign in again.');
+    return user;
+  }
+  const readEmail = (body: Record<string, unknown>) => {
+    const email = typeof body.email === 'string' ? normalizeEmail(body.email) : null;
+    if (!email) throw new ApiError(400, 'bad_email', 'Enter a valid email address.');
+    return email;
+  };
+  const readPassword = (body: Record<string, unknown>, checkLength: boolean) => {
+    const pw = body.password;
+    if (typeof pw !== 'string' || pw.length === 0 || pw.length > MAX_PASSWORD) {
+      throw new ApiError(400, 'bad_password', 'Enter your password.');
+    }
+    if (checkLength && pw.length < MIN_PASSWORD) {
+      throw new ApiError(400, 'weak_password', `The password must be at least ${MIN_PASSWORD} characters.`);
+    }
+    return pw;
+  };
+  const readName = (body: Record<string, unknown>) => {
+    const v = body.name ?? '';
+    if (typeof v !== 'string' || v.trim().length > MAX_NAME) {
+      throw new ApiError(400, 'bad_name', `The name must be at most ${MAX_NAME} characters.`);
+    }
+    return v.trim();
+  };
+  const accountError = (err: unknown): never => {
+    if (err instanceof AccountError) {
+      throw err.code === 'email_taken'
+        ? new ApiError(409, err.code, err.message)
+        : new ApiError(401, err.code, err.message);
+    }
+    throw err;
+  };
+
+  api.use('/auth/*', async (c, next) => {
+    await next();
+    c.header('Cache-Control', 'no-store');
+  });
+
+  api.post('/auth/register', async (c) => {
+    const store = needAccounts();
+    limitAuth(c);
+    const body = await jsonBody(c);
+    const input = { email: readEmail(body), password: readPassword(body, true), name: readName(body) };
+    const { user, token } = await store.register(input).catch(accountError);
+    return c.json({ user, token }, 201);
+  });
+
+  api.post('/auth/login', async (c) => {
+    const store = needAccounts();
+    limitAuth(c);
+    const body = await jsonBody(c);
+    const input = { email: readEmail(body), password: readPassword(body, false) };
+    const { user, token } = await store.login(input).catch(accountError);
+    return c.json({ user, token });
+  });
+
+  api.get('/auth/me', (c) => c.json({ user: signedIn(c) }));
+
+  api.patch('/auth/me', async (c) => {
+    const user = signedIn(c);
+    const name = readName(await jsonBody(c));
+    return c.json({ user: needAccounts().updateName(user.id, name) });
+  });
+
+  api.post('/auth/logout', (c) => {
+    const token = bearer(c);
+    if (token && accounts) accounts.logout(token);
+    return c.json({ signedIn: false });
+  });
+
+  // Deleting an account asks for the password again. App stores require that
+  // people can delete an account from inside the app.
+  api.delete('/auth/me', async (c) => {
+    const store = needAccounts();
+    const user = signedIn(c);
+    limitAuth(c);
+    const password = readPassword(await jsonBody(c), false);
+    await store.login({ email: user.email, password }).catch(accountError);
+    store.remove(user.id);
     return c.json({ deleted: true });
   });
 
