@@ -80,6 +80,42 @@ Report fields: `deviceId` and `clientId` (4–64 letters, digits, `-`, `_`; the 
 
 There are no user accounts. Reports are stored in SQLite with their photos under `STORAGE_DIR` (default `./storage`; a volume in Docker). Each client gets 1200 requests per 10 minutes and 30 new reports per hour (`RATE_LIMIT_PER_10_MIN`, `REPORTS_PER_HOUR`); behind a proxy the client is the first `X-Forwarded-For` address. Put a proxy limit in front as well before exposing it widely.
 
+## Firesight for Organizations
+
+`/org/` is a second app for organizations that watch many places at once: fire stations and civil defence, insurers, companies, NGOs and municipalities. The phone app stays personal; organizations work on the web only. An organization owns up to 200 **sites** (a named circle, optionally with a value, a head count and the year a project started), and the console answers "which of my sites need attention today, and why?" from the same engine as the public site: live satellite fires, the fire danger forecast and the harmonized record.
+
+Access is by request: a visitor fills in `/org/request-access`, an admin approves the request on the Requests page of `/admin`, and the applicant receives a one-time invitation link. People sign in with a Firesight account; owners change sites and send alerts, members read everything, and owners invite teammates from the Team page.
+
+All routes are under `/api/v1`, need `Authorization: Bearer <token>` from `POST /auth/login`, and are never cached.
+
+| Endpoint | Who | Does |
+|---|---|---|
+| `POST /org-requests` `{orgName, kind, country, contactName, email, phone?, sitesEstimate?, message?}` | public | Asks for an organization (`kind`: `fire_station`, `insurer`, `company`, `ngo`). Limited like sign-in attempts; a second request from the same email returns the pending one |
+| `GET /invites/{token}` | public | The invitation: organization name and kind, invited email and role, expiry |
+| `POST /invites/{token}/accept` `{name, password}` | public | Creates the account for the invited email and joins. Signed in, accepts for the current account instead |
+| `GET /orgs` | signed in | My organizations, each with its sites and its active members-only alerts |
+| `GET /orgs/{id}` | member | Organization (with my role), members and sites |
+| `DELETE /orgs/{id}` | owner | Deletes the organization and its sites |
+| `DELETE /orgs/{id}/members/me` | member | Leaves; `409 last_owner` for the only owner |
+| `DELETE /orgs/{id}/members/{userId}` | owner | Removes a member |
+| `GET /orgs/{id}/invites` | owner | Pending invitations |
+| `POST /orgs/{id}/invites` `{email, role?}` | owner | A one-time link (`path`, `/org/invite/{token}`) for a teammate; `role` is `member` (default) or `owner` |
+| `DELETE /orgs/{id}/invites/{inviteId}` | owner | Withdraws a pending invitation |
+| `PUT /orgs/{id}/sites` `{sites: [...]}` | owner | Replaces the site list. A site is `{id?, name, lat, lon, radiusKm, value?, people?, startedYear?}`; `400 outside_coverage` outside the four countries |
+| `GET /orgs/{id}/board?days=7` | member | Sites ranked by a 0–100 score, each with its status (`act`, `watch`, `ok`), reasons, danger per day, fires nearby and ground reports |
+| `GET /orgs/{id}/sites/{siteId}/report` | member | One site: history of its box since 2000, danger, live fires within 25 km, ground reports |
+| `GET /orgs/{id}/exposure` | member | Per site: average fire activity per year, worst year, peak danger this week; total value and value at risk this week |
+| `GET /orgs/{id}/sites/{siteId}/evidence?date=&days=3&km=5` | member | Claim check: every MODIS and VIIRS detection within `km` of the site in the `days` around `date`, with sensor, time and confidence, and ground reports |
+| `GET /orgs/{id}/alerts` | member | The last 50 alerts sent, and whether the organization may alert the public |
+| `POST /orgs/{id}/alerts` `{siteId, title, message, level, audience, hours?, titleAr?, messageAr?}` | owner | An alert about one site. `audience: "members"` reaches members; `"public"` (verified organizations only, else `403 not_verified`) also reaches every phone in or watching the site, signed with the organization's name. 10 per hour per organization |
+| `POST /orgs/{id}/alerts/{alertId}/cancel` | owner | Ends an alert early |
+| `GET /orgs/{id}/notifications` | member | The last 50 notifications (sites needing action, the daily digest, alerts sent) with my read mark and unread count |
+| `POST /orgs/{id}/notifications/read` | member | Marks everything read for me; returns the read mark |
+
+Errors keep the usual shape: `401 signed_out`, `403 not_member` / `owner_only`, `404 not_found`, `429 rate_limited`. An admin marks an organization **verified** on the Organizations page of `/admin`.
+
+The score (`server/risk.ts`) is a plain rule table, not a model calibrated on real events: a live fire inside the site is 100, within 5 km 85, within 25 km 60; otherwise it follows the fire danger class of today and of the week's peak. A site's country is decided by the country's bounding box, not its border, so a point just across a land border (or just offshore) is accepted. The console is in English and Arabic (RTL), like the public site.
+
 ## Fire danger forecast
 
 `server/fwi.ts` is the Canadian Fire Weather Index (Van Wagner 1987), the index EFFIS uses for Europe, checked against the published reference day. `server/forecast.ts` runs it on a grid of at most 48 points inside each country (0.15° in Lebanon and Cyprus, 0.5–0.6° in Portugal and Greece) with Open-Meteo weather at local noon (free, no key).
@@ -124,6 +160,8 @@ pipeline/   fetch-firms.mjs · fetch-recent.mjs · clip.mjs · pack.mjs · bound
 src/lib/    harmonize.ts · stats.ts · analysis.ts · service.ts · sentence.ts · rings.ts · coords.ts · time.ts   (+ harmonize.test.ts)
 src/worker/ analysis.worker.ts   runs lib/service.ts off the main thread
 server/     app.ts (routes) · main.ts · refresh.ts · live.ts (FIRMS NRT) · fwi.ts + forecast.ts (fire danger) · reports.ts (SQLite) · admin.ts + admin-page.ts (/admin) · ratelimit.ts   runs the same lib/service.ts   (+ api.test.ts, phone.test.ts, admin.test.ts, forecast.test.ts)
+            orgs.ts (organizations, SQLite) · risk.ts (site score) · org-routes.ts (/orgs)   (+ orgs.test.ts, risk.test.ts)
+apps/org/src/  the console for organizations (/org/): routes/ (Landing · RequestAccess · Login · Invite · app/Overview · Sites · SitePage · Tools · Alerts · Team · Settings) · ui/ (Shell, SurveyMap, parts, icons) · lib/ (api, session, i18n, grid, csv)
 src/components/  MapPanel · Verdict · NowCard · PeriodPanel · FireRings · BurnCalendar · Records · SeasonChart · TrustPanel · ExportMenu · Intro
 src/i18n/   en.tsx (English wording, and the shape every language fills) · ar.tsx (Arabic) · index.tsx (which language is in use)   (+ i18n.test.ts)
 ```

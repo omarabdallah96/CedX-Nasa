@@ -15,7 +15,8 @@ import type { PointsResult } from '../worker/analysis.worker.ts';
 const GIBS =
   'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg';
 
-const STYLE: StyleSpecification = {
+/** Also the base of the organization console's map. */
+export const STYLE: StyleSpecification = {
   version: 8,
   projection: { type: 'globe' },
   sky: { 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 4, 1, 6, 0] },

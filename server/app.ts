@@ -2,6 +2,7 @@
 // packed data files by the same code the website runs. Two additions serve the
 // phone app: live FIRMS hotspots, and ground reports people send from the field.
 import { readFile, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -19,6 +20,8 @@ import { createAdmin } from './admin.ts';
 import type { BroadcastStore } from './broadcasts.ts';
 import { MAX_ZONES, type AccountZone, type DeviceStore, type DeviceZone } from './devices.ts';
 import type { Push } from './push.ts';
+import type { Org, OrgStore } from './orgs.ts';
+import { addOrgRoutes, type OrgBoard } from './org-routes.ts';
 import { AccountError, MAX_NAME, MAX_PASSWORD, MIN_PASSWORD, normalizeEmail, type AccountStore, type User } from './accounts.ts';
 import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
 import { lastWeek, rangeSummary, selectionVerdict, type RangeSummary } from '../src/lib/analysis.ts';
@@ -32,7 +35,7 @@ import { FIRST_DAY, isoDate, MONTHS_LONG, parseIsoDate, spanName } from '../src/
 export const UNIT = 'active-fire cell-days, VIIRS-equivalent (one ~1 km grid cell with fire on one day)';
 const MAX_JSON_HOTSPOTS = 20_000;
 
-type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 429 | 503;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 503;
 
 class ApiError extends Error {
   status: ErrorStatus;
@@ -108,6 +111,12 @@ export interface AppOptions {
   safety?: Safety;
   /** Escape route requests per client per 10 minutes (each one asks outside services). */
   escapesPer10Min?: number;
+  /** Organizations (companies, fire stations, insurers, NGOs); the /orgs endpoints answer 404 without it. */
+  orgs?: OrgStore;
+  /** Alerts one organization can send per hour. */
+  orgAlertsPerHour?: number;
+  /** Requests for organization access per client per hour. */
+  orgRequestsPerHour?: number;
 }
 
 /** Arabic names, from pipeline/config.mjs. */
@@ -134,7 +143,7 @@ function clientKey(c: Context): string {
   }
 }
 
-export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts, devices, push, safety, escapesPer10Min = 40 }: AppOptions) {
+export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts, devices, push, safety, escapesPer10Min = 40, orgs, orgAlertsPerHour, orgRequestsPerHour }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
@@ -277,6 +286,18 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
         'PUT /api/v1/me/zones         {zones}  (Authorization: Bearer <token>)',
         'GET /api/v1/resources?lat=&lon=&radiusKm=   water, fire stations, hospitals, assembly points (OpenStreetMap)',
         'GET /api/v1/escape?lat=&lon=&fires=lat,lon;lat,lon   routes away from the fires, downwind danger areas',
+        'POST /api/v1/org-requests    {orgName, kind, country, contactName, email, phone?, sitesEstimate?, message?}  ask for access (invite only)',
+        'GET /api/v1/invites/{token}  ·  POST /api/v1/invites/{token}/accept  {name?, password?}  a one-time invitation',
+        'GET /api/v1/orgs             my organizations, their sites and members-only alerts (all /orgs routes: Authorization: Bearer <token>)',
+        'GET|DELETE /api/v1/orgs/{id}  ·  DELETE /api/v1/orgs/{id}/members/{userId|me}',
+        'GET|POST /api/v1/orgs/{id}/invites  {email, role}  ·  DELETE /api/v1/orgs/{id}/invites/{inviteId}',
+        'PUT /api/v1/orgs/{id}/sites  {sites: [{name, lat, lon, radiusKm, value?, people?, startedYear?}]}',
+        'GET /api/v1/orgs/{id}/board?days=7                     sites ranked by risk, with reasons',
+        'GET /api/v1/orgs/{id}/sites/{siteId}/report            history, danger, fires, ground reports',
+        'GET /api/v1/orgs/{id}/exposure                         insurer table: history per site, value at risk',
+        'GET /api/v1/orgs/{id}/sites/{siteId}/evidence?date=YYYY-MM-DD&days=3&km=5   claim check',
+        'GET|POST /api/v1/orgs/{id}/alerts  {siteId, title, message, level, audience?: members|public}',
+        'GET /api/v1/orgs/{id}/notifications  ·  POST /api/v1/orgs/{id}/notifications/read',
       ],
     });
   });
@@ -1129,8 +1150,22 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     store.remove(user.id);
     devices?.unlinkUser(user.id);
     devices?.removeAccountZones(user.id);
+    orgs?.removeUser(user.id);
     return c.json({ deleted: true });
   });
+
+  // ---- Organizations: many sites, one risk board ----
+  // The monitor (server/org-monitor.ts) ranks every organization's sites with the same board.
+  let orgBoard: ((org: Org, days: number) => Promise<OrgBoard>) | null = null;
+  if (orgs) {
+    orgBoard = addOrgRoutes(api, {
+      orgs, service, accounts, forecast, live, reports, broadcasts, devices, push,
+      signedIn, jsonBody, limitAuth, clientKey, readPassword, readName, accountError,
+      fail: (status, code, message) => { throw new ApiError(status, code, message); },
+      alertsPerHour: orgAlertsPerHour,
+      requestsPerHour: orgRequestsPerHour,
+    }).board;
+  }
 
   api.notFound((c) => c.json({ error: { code: 'not_found', message: `No such endpoint: ${c.req.path}. See /api/v1 for the list.` } }, 404));
   api.onError((err, c) => {
@@ -1143,9 +1178,17 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
   app.get('/api/v1/', (c) => c.redirect('/api/v1'));
   app.route('/api/v1', api);
   app.all('/api/*', (c) => c.json({ error: { code: 'not_found', message: 'The API lives under /api/v1.' } }, 404));
-  app.route('/', createAdmin({ password: adminPassword, reports, accounts, broadcasts, devices, push, clientKey }));
-  if (siteDir) app.use('*', serveStatic({ root: path.relative(process.cwd(), siteDir) || '.' }));
-  return app;
+  app.route('/', createAdmin({ password: adminPassword, reports, accounts, broadcasts, devices, push, orgs, clientKey }));
+  if (siteDir) {
+    app.use('*', serveStatic({ root: path.relative(process.cwd(), siteDir) || '.' }));
+    // The organization app routes in the browser: any /org/ path without a file is its page.
+    const orgPage = path.join(siteDir, 'org', 'index.html');
+    if (existsSync(orgPage)) {
+      app.get('/org', (c) => c.redirect('/org/'));
+      app.get('/org/*', async (c) => c.html(await readFile(orgPage, 'utf8')));
+    }
+  }
+  return Object.assign(app, { orgBoard });
 }
 
 /** Names for the `src` codes of the harmonized record. */

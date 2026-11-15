@@ -12,6 +12,8 @@ const ICONS = {
   alerts: icon('<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
   users: icon('<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/>'),
   zones: icon('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>'),
+  orgs: icon('<path d="M3 21h18M5 21V7l7-4 7 4v14"/><path d="M9 21v-5h6v5M9 10h.01M15 10h.01M9 13h.01M15 13h.01"/>'),
+  requests: icon('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
   menu: icon('<path d="M4 6h16M4 12h16M4 18h16"/>'),
   out: icon('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>'),
   refresh: icon('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
@@ -70,6 +72,8 @@ export const ADMIN_HTML = `<!doctype html>
       ${nav('alerts', 'Zone alerts')}
       ${nav('users', 'Users')}
       ${nav('zones', 'Zones')}
+      ${nav('requests', 'Access requests')}
+      ${nav('orgs', 'Organizations')}
     </nav>
     <div class="side-foot">
       ${THEME_SWITCH}
@@ -182,11 +186,34 @@ export const ADMIN_HTML = `<!doctype html>
           </table>
         </div>
       </div>
+
+      <div id="page-orgs" class="page" hidden>
+        <p id="orgs-empty" class="empty-state" hidden>No organizations yet. Approve an access request to create one.</p>
+        <div class="card table-wrap" id="orgs-wrap">
+          <table class="table" id="orgs-table">
+            <thead><tr><th>Organization</th><th>Kind</th><th>Owner</th><th>Members</th><th>Sites</th><th>Created</th><th>Public alerts</th><th>Invite</th></tr></thead>
+            <tbody id="orgs"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="page-requests" class="page" hidden>
+        <p id="requests-empty" class="empty-state" hidden>No requests yet. Organizations ask for access at /org/request-access.</p>
+        <div id="requests" class="requests"></div>
+      </div>
     </main>
   </div>
 </div>
 
 <div id="toast" class="toast" role="status" hidden></div>
+<dialog id="link-dialog" class="link-dialog" aria-labelledby="link-title">
+  <h2 id="link-title">Invitation link</h2>
+  <p id="link-sub" class="muted"></p>
+  <label class="link-row"><span class="sr-only">Link</span><input id="link-url" readonly><button id="link-copy" type="button">Copy link</button></label>
+  <label for="link-message" class="muted">Ready to send (WhatsApp, email):</label>
+  <textarea id="link-message" rows="6" readonly></textarea>
+  <div class="link-actions"><button id="link-copy-message" type="button" class="ghost">Copy message</button><form method="dialog"><button>Done</button></form></div>
+</dialog>
 <dialog id="viewer"><img id="viewer-img" alt="Report photo"><form method="dialog"><button class="ghost">Close</button></form></dialog>
 </body>
 </html>`;
@@ -354,6 +381,28 @@ details.zones summary .muted { font-weight: 400; }
 
 /* Zones table */
 .table-wrap { overflow: hidden; }
+.requests { display: grid; gap: 12px; }
+.request { display: grid; gap: 10px; padding: 16px 18px; }
+.request header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.request h3 { margin: 0; font-size: 16px; }
+.request dl { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px 16px; margin: 0; font-size: 14px; }
+.request dt { font-size: 12px; color: var(--muted); }
+.request dd { margin: 0; overflow-wrap: anywhere; }
+.request blockquote { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--bg); font-size: 14px; white-space: pre-wrap; }
+.request .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.request .row-actions label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; margin-inline-end: auto; }
+.badge.pending { color: var(--accent); }
+.badge.approved { color: var(--ok); }
+.link-dialog { width: min(560px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.link-dialog::backdrop { background: rgb(0 0 0 / .45); }
+.link-dialog h2 { margin: 0 0 4px; font-size: 18px; }
+.link-dialog p { margin: 0 0 14px; }
+.link-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.link-row input { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 13px; }
+.link-dialog textarea { width: 100%; margin-top: 6px; font: inherit; font-size: 14px; resize: vertical; }
+.link-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.link-actions form { margin: 0; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .table th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
   padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
@@ -412,7 +461,10 @@ const PAGES = {
   alerts: { title: 'Zone alerts', sub: 'Send a message to every phone in an area.' },
   users: { title: 'Users', sub: 'Accounts, their plan, phone and alert zones.' },
   zones: { title: 'Zones', sub: 'Every alert zone people are watching, and who it belongs to.' },
+  orgs: { title: 'Organizations', sub: 'Companies, fire stations, insurers and NGOs. Verify one to let it alert the public inside its sites.' },
+  requests: { title: 'Access requests', sub: "Organizations asking to use Firesight. Approve one to create it and get its owner's one-time link." },
 };
+const ORG_KINDS = { fire_station: 'Fire station / civil defence', insurer: 'Insurer', company: 'Company', ngo: 'NGO / municipality' };
 const state = { status: 'all', label: '', device: '', before: null, photoUrls: [], page: 'reports', users: [], zones: [] };
 
 // ---- Theme: 'system' follows the device; 'light' or 'dark' is remembered in this browser. ----
@@ -515,6 +567,8 @@ function load(page) {
   if (page === 'alerts') loadAlerts();
   if (page === 'users') loadUsers();
   if (page === 'zones') loadZones();
+  if (page === 'orgs') loadOrgs();
+  if (page === 'requests') loadRequests();
 }
 
 /** Sidebar counts, fetched once after sign-in; each page updates its own count when it loads. */
@@ -523,7 +577,90 @@ function loadCounts() {
   call('GET', '/admin/api/broadcasts').then((d) => setCount('alerts', activeCount(d) || null)).catch(() => {});
   call('GET', '/admin/api/users?q=').then((d) => setCount('users', d.total)).catch(() => {});
   call('GET', '/admin/api/zones').then((d) => setCount('zones', d.zones.length)).catch(() => {});
+  call('GET', '/admin/api/orgs').then((d) => setCount('orgs', d.orgs.length || null)).catch(() => {});
+  call('GET', '/admin/api/org-requests').then((d) => setCount('requests', d.requests.filter((r) => r.status === 'pending').length || null)).catch(() => {});
 }
+
+// ---- Organizations ----
+async function loadOrgs() {
+  try {
+    const { orgs } = await call('GET', '/admin/api/orgs');
+    setCount('orgs', orgs.length || null);
+    $('orgs').replaceChildren(...orgs.map((o) => el('tr', null, [
+      el('td', { 'data-label': 'Organization', text: o.name }),
+      el('td', { 'data-label': 'Kind', class: 'muted', text: ORG_KINDS[o.kind] || o.kind }),
+      el('td', { 'data-label': 'Owner', class: 'muted', text: o.owner || 'Unknown' }),
+      el('td', { 'data-label': 'Members', class: 'num', text: String(o.members) }),
+      el('td', { 'data-label': 'Sites', class: 'num', text: String(o.sites) }),
+      el('td', { 'data-label': 'Created', class: 'muted', text: day(o.createdAt) }),
+      el('td', { 'data-label': 'Public alerts' }, [el('button', {
+        class: 'small', text: o.verified ? 'Verified: remove' : 'Verify',
+        title: o.verified ? 'Stop this organization alerting the public' : 'Let this organization alert the public inside its sites',
+        onclick: () => call('POST', '/admin/api/orgs/' + encodeURIComponent(o.id) + '/verified', { verified: !o.verified })
+          .then(() => { toast(o.verified ? o.name + ' can no longer alert the public.' : o.name + ' can now alert the public.'); return loadOrgs(); })
+          .catch(quiet),
+      })]),
+      el('td', { 'data-label': 'Invite' }, [el('button', {
+        class: 'small', text: 'Owner link',
+        title: 'A new one-time link for an owner of this organization',
+        onclick: () => {
+          const email = prompt('Email of the person who will own ' + o.name + ':', o.owner || '');
+          if (!email) return;
+          call('POST', '/admin/api/orgs/' + encodeURIComponent(o.id) + '/invite', { email, role: 'owner' })
+            .then((d) => showLink(o.name, d.invite.email, d.path, d.invite.expiresAt)).catch(quiet);
+        },
+      })]),
+    ])));
+    $('orgs-wrap').hidden = orgs.length === 0;
+    $('orgs-empty').hidden = orgs.length > 0;
+  } catch (e) { quiet(e); }
+}
+// ---- Access requests ----
+const KIND_LONG = ORG_KINDS;
+async function loadRequests() {
+  try {
+    const { requests } = await call('GET', '/admin/api/org-requests');
+    setCount('requests', requests.filter((r) => r.status === 'pending').length || null);
+    $('requests-empty').hidden = requests.length > 0;
+    $('requests').replaceChildren(...requests.map((r) => {
+      const verify = el('input', { type: 'checkbox' });
+      const decide = (action) => call('POST', '/admin/api/org-requests/' + encodeURIComponent(r.id) + '/' + action, action === 'approve' ? { verified: verify.checked } : undefined);
+      return el('article', { class: 'card request' }, [
+        el('header', null, [
+          el('h3', { text: r.orgName }),
+          el('span', { class: 'badge ' + r.status, text: r.status }),
+          el('span', { class: 'muted', text: (KIND_LONG[r.kind] || r.kind) + ' · ' + r.country + ' · ' + when(r.createdAt) }),
+        ]),
+        el('dl', null, [
+          el('div', null, [el('dt', { text: 'Contact' }), el('dd', { text: r.contactName })]),
+          el('div', null, [el('dt', { text: 'Email' }), el('dd', null, [el('a', { href: 'mailto:' + r.email, text: r.email })])]),
+          r.phone ? el('div', null, [el('dt', { text: 'Phone' }), el('dd', null, [el('a', { href: 'tel:' + r.phone, text: r.phone })])]) : null,
+          r.sitesEstimate ? el('div', null, [el('dt', { text: 'Sites' }), el('dd', { text: String(r.sitesEstimate) })]) : null,
+        ]),
+        r.message ? el('blockquote', { text: r.message }) : null,
+        r.status === 'pending'
+          ? el('div', { class: 'row-actions' }, [
+              el('label', { title: 'Verified organizations (fire stations, civil defence, municipalities) can alert the public' }, [verify, el('span', { text: 'Verified: may alert the public' })]),
+              el('button', { class: 'ghost danger small', text: 'Decline', onclick: () => { if (confirm('Decline ' + r.orgName + '?')) decide('decline').then(loadRequests).catch(quiet); } }),
+              el('button', { class: 'small', text: 'Approve and get link', onclick: () => decide('approve').then((d) => { showLink(d.org.name, d.invite.email, d.path, d.invite.expiresAt); loadRequests(); }).catch(quiet) }),
+            ])
+          : el('p', { class: 'muted', text: (r.status === 'approved' ? 'Approved ' : 'Declined ') + (r.decidedAt ? when(r.decidedAt) : '') + (r.status === 'approved' ? '. Lost the link? Use “Owner link” on the Organizations page.' : '') }),
+      ]);
+    }));
+  } catch (e) { quiet(e); }
+}
+
+/** The one-time link, shown once: the server keeps only its hash. */
+function showLink(orgName, email, path, expiresAt) {
+  const url = location.origin + path;
+  $('link-sub').textContent = 'For ' + email + ' · ' + orgName + ' · works once, until ' + day(expiresAt) + '. It is shown only now: copy it before closing.';
+  $('link-url').value = url;
+  $('link-message').value = 'Hello,\\n\\n' + orgName + ' now has access to Firesight for Organizations. Open this link to set your password and start adding your sites:\\n\\n' + url + '\\n\\nThe link works once and expires on ' + day(expiresAt) + '.\\n\\nThe Firesight team';
+  $('link-dialog').showModal();
+  $('link-url').select();
+}
+const copy = (text, what) => navigator.clipboard.writeText(text).then(() => toast(what + ' copied.'), () => toast('Select it and copy by hand.'));
+
 const activeCount = (d) => d.broadcasts.filter((b) => !b.cancelled && b.expiresAt > d.now).length;
 
 // ---- Reports ----
@@ -937,6 +1074,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('scrim').addEventListener('click', () => openSide(false));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') openSide(false); });
   $('reload').addEventListener('click', () => load(state.page));
+  $('link-copy').addEventListener('click', () => copy($('link-url').value, 'Link'));
+  $('link-copy-message').addEventListener('click', () => copy($('link-message').value, 'Message'));
   $('f-status').addEventListener('change', (e) => { state.status = e.target.value; refreshReports(); });
   $('f-label').addEventListener('change', (e) => { state.label = e.target.value; refreshReports(); });
   $('more').addEventListener('click', () => loadList(false).catch(quiet));

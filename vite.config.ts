@@ -9,5 +9,5 @@ export default defineConfig({
   // to its bundled data when it is not running.
   server: { proxy: { '/api': { target: 'http://localhost:8787', changeOrigin: true } } },
   preview: { proxy: { '/api': { target: 'http://localhost:8787', changeOrigin: true } } },
-  test: { include: ['src/**/*.test.ts', 'server/**/*.test.ts'] },
+  test: { include: ['src/**/*.test.ts', 'server/**/*.test.ts', 'apps/**/*.test.ts'] },
 });

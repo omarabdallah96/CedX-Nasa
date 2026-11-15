@@ -252,6 +252,8 @@ export function App() {
   const summaryOfPeriod = analysis && cal && period ? rangeSummary(analysis, cal, period.from, period.to) : null;
   const week = analysis && cal ? lastWeek(analysis, cal) : null;
   const weekShown = !!(period && week && period.from === week.from && period.to === week.to);
+  // The org console is a separate app: in dev it runs on :5174, in prod it's served at /org/.
+  const orgSignIn = import.meta.env.DEV ? 'http://localhost:5174/org/login' : '/org/login';
 
   return (
     <div className="app" data-phase={phase}>
@@ -269,6 +271,7 @@ export function App() {
               : [72, 64, 80, 76].map((w, i) => <Sk key={i} w={w} h={40} r={999} />)}
           </nav>
           <a className="head-link" href="#trust" onClick={(e) => { e.preventDefault(); document.getElementById('trust')?.scrollIntoView(); }}>{t.app.howItWorks}</a>
+          <a className="head-link" href={orgSignIn}>{t.app.forOrgs}</a>
           <ThemeSwitch />
           <LangSwitch />
         </header>

@@ -1,0 +1,88 @@
+/* Firesight for Organizations: the night survey plate.
+   A dark slate-green ground printed with moss hairlines; status inks (act,
+   watch, ok) only where they mean something; one survey cyan reserved for
+   things you can press. The light theme is the same sheet printed on paper. */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --ground: #0c1311;
+  --plate: #111a17;
+  --plate-2: #16211d;
+  --plate-3: #1d2a25;
+  --line: rgba(190, 220, 200, 0.09);
+  --line-strong: rgba(190, 220, 200, 0.17);
+  --contour: #4b6455;
+  --grid-line: rgba(208, 234, 216, 0.42);
+  --ink: #e4ece6;
+  --ink-2: #a9b8ad;
+  --ink-3: #7a8b80;
+  --action: #5ec9dd;
+  --action-ink: #04171b;
+  --action-soft: rgba(94, 201, 221, 0.12);
+  --act: #ff5e50;
+  --watch: #efb43f;
+  --ok: #57c494;
+  --fire: #ffd27a;
+  --act-soft: rgba(255, 94, 80, 0.12);
+  --watch-soft: rgba(239, 180, 63, 0.12);
+  --ok-soft: rgba(87, 196, 148, 0.1);
+  --lv-very_low: #2b6956;
+  --lv-low: #5a9a52;
+  --lv-moderate: #d6bb42;
+  --lv-high: #e98a3a;
+  --lv-very_high: #de493b;
+  --lv-extreme: #9b2b68;
+  --lv-ink-dark: #0c1311;
+  --lv-ink-light: #fff;
+  --map-tint: #0c1311;
+  --map-tint-opacity: 0.36;
+  --map-bright: dark;
+  --overlay-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --selection: rgba(94, 201, 221, 0.32);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --ground: #edf0eb;
+  --plate: #fbfcf9;
+  --plate-2: #f2f5f0;
+  --plate-3: #e5eae3;
+  --line: rgba(22, 40, 30, 0.1);
+  --line-strong: rgba(22, 40, 30, 0.2);
+  --contour: #8ba291;
+  --grid-line: rgba(18, 44, 30, 0.5);
+  --ink: #14201a;
+  --ink-2: #3c4b42;
+  --ink-3: #5f6f65;
+  --action: #087a90;
+  --action-ink: #ffffff;
+  --action-soft: rgba(8, 122, 144, 0.1);
+  --act: #cc3226;
+  --watch: #9b6400;
+  --ok: #18825a;
+  --fire: #d9480f;
+  --act-soft: rgba(204, 50, 38, 0.09);
+  --watch-soft: rgba(155, 100, 0, 0.09);
+  --ok-soft: rgba(24, 130, 90, 0.08);
+  --map-tint: #edf0eb;
+  --map-tint-opacity: 0.4;
+  --map-bright: light;
+  --overlay-shadow: 0 16px 40px rgba(20, 40, 30, 0.16), 0 2px 8px rgba(20, 40, 30, 0.1);
+  --selection: rgba(8, 122, 144, 0.22);
+}
+
+:root {
+  --sans: 'Archivo Variable', 'IBM Plex Sans Arabic', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* Survey lettering: the same face, narrowed. */
+  --cond: 76%;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --rail: 248px;
+  --top: 56px;
+}
+
+:root:lang(ar) {
+  --sans: 'IBM Plex Sans Arabic', 'Archivo Variable', system-ui, sans-serif;
+}

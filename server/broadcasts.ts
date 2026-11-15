@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { DeviceStore, Recipient } from './devices.ts';
+import type { Push } from './push.ts';
 
 export const BROADCAST_LEVELS = ['info', 'warning', 'danger'] as const;
 export type BroadcastLevel = (typeof BROADCAST_LEVELS)[number];
@@ -28,7 +30,14 @@ export interface NewBroadcast {
   radiusKm: number;
   /** How long it stays active. */
   hours: number;
+  /** An organization's alert: its name is shown as the sender. */
+  sender?: string;
+  orgId?: string;
+  /** 'members': only the organization's members receive it. Default 'public'. */
+  audience?: BroadcastAudience;
 }
+
+export type BroadcastAudience = 'public' | 'members';
 
 export interface Broadcast {
   id: string;
@@ -43,6 +52,10 @@ export interface Broadcast {
   createdAt: string;
   expiresAt: string;
   cancelled: boolean;
+  /** The organization that sent it; empty for alerts from the admin page. */
+  sender: string;
+  orgId: string | null;
+  audience: BroadcastAudience;
   /** Phones the push went to, and how many FCM accepted. Null before sending. */
   pushed: { recipients: number; delivered: number } | null;
 }
@@ -60,6 +73,9 @@ interface Row {
   created_at: string;
   expires_at: string;
   cancelled: number;
+  sender: string;
+  org_id: string | null;
+  audience: string;
   recipients: number | null;
   delivered: number | null;
 }
@@ -77,13 +93,21 @@ const toBroadcast = (r: Row): Broadcast => ({
   createdAt: r.created_at,
   expiresAt: r.expires_at,
   cancelled: r.cancelled === 1,
+  sender: r.sender,
+  orgId: r.org_id,
+  audience: r.audience === 'members' ? 'members' : 'public',
   pushed: r.recipients === null ? null : { recipients: r.recipients, delivered: r.delivered ?? 0 },
 });
 
 export interface BroadcastStore {
   add(b: NewBroadcast): Broadcast;
-  /** Not cancelled and not expired: what phones receive. */
+  /** Public, not cancelled and not expired: what every phone receives. */
   active(): Broadcast[];
+  /** Active members-only alerts of these organizations. */
+  activeForOrgs(orgIds: string[]): Broadcast[];
+  /** Newest first: everything one organization sent. */
+  recentForOrg(orgId: string, limit: number): Broadcast[];
+  get(id: string): Broadcast | null;
   /** Newest first, for the admin page. */
   recent(limit: number): Broadcast[];
   cancel(id: string): Broadcast | null;
@@ -120,23 +144,42 @@ export function createBroadcastStore(dir: string, { now = Date.now }: { now?: ()
   const columns = new Set((db.prepare('PRAGMA table_info(broadcasts)').all() as unknown as { name: string }[]).map((c) => c.name));
   if (!columns.has('recipients')) db.exec('ALTER TABLE broadcasts ADD COLUMN recipients INTEGER');
   if (!columns.has('delivered')) db.exec('ALTER TABLE broadcasts ADD COLUMN delivered INTEGER');
+  if (!columns.has('sender')) db.exec(`ALTER TABLE broadcasts ADD COLUMN sender TEXT NOT NULL DEFAULT ''`);
+  if (!columns.has('org_id')) db.exec('ALTER TABLE broadcasts ADD COLUMN org_id TEXT');
+  if (!columns.has('audience')) db.exec(`ALTER TABLE broadcasts ADD COLUMN audience TEXT NOT NULL DEFAULT 'public'`);
   const iso = (ms: number) => new Date(ms).toISOString();
   const byId = db.prepare('SELECT * FROM broadcasts WHERE id = ?');
 
   return {
     add(b) {
       const id = randomUUID();
-      db.prepare(`INSERT INTO broadcasts (id, title, message, title_ar, message_ar, level, lat, lon, radius_km, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      db.prepare(`INSERT INTO broadcasts (id, title, message, title_ar, message_ar, level, lat, lon, radius_km, created_at, expires_at, sender, org_id, audience)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, b.title, b.message, b.titleAr, b.messageAr, b.level, b.lat, b.lon, b.radiusKm,
-        iso(now()), iso(now() + b.hours * 3_600_000),
+        iso(now()), iso(now() + b.hours * 3_600_000), b.sender ?? '', b.orgId ?? null, b.audience ?? 'public',
       );
       return toBroadcast(byId.get(id) as unknown as Row);
     },
 
     active() {
-      const rows = db.prepare('SELECT * FROM broadcasts WHERE cancelled = 0 AND expires_at > ? ORDER BY created_at DESC').all(iso(now()));
+      const rows = db.prepare(`SELECT * FROM broadcasts WHERE cancelled = 0 AND audience = 'public' AND expires_at > ? ORDER BY created_at DESC`).all(iso(now()));
       return (rows as unknown as Row[]).map(toBroadcast);
+    },
+
+    activeForOrgs(orgIds) {
+      if (orgIds.length === 0) return [];
+      const rows = db.prepare(`SELECT * FROM broadcasts WHERE cancelled = 0 AND audience = 'members' AND expires_at > ?
+        AND org_id IN (${orgIds.map(() => '?').join(',')}) ORDER BY created_at DESC`).all(iso(now()), ...orgIds);
+      return (rows as unknown as Row[]).map(toBroadcast);
+    },
+
+    recentForOrg(orgId, limit) {
+      return (db.prepare('SELECT * FROM broadcasts WHERE org_id = ? ORDER BY created_at DESC LIMIT ?').all(orgId, limit) as unknown as Row[]).map(toBroadcast);
+    },
+
+    get(id) {
+      const row = byId.get(id) as Row | undefined;
+      return row ? toBroadcast(row) : null;
     },
 
     recent(limit) {
@@ -163,4 +206,32 @@ export function createBroadcastStore(dir: string, { now = Date.now }: { now?: ()
       db.close();
     },
   };
+}
+
+/**
+ * Pushes an alert to phones and records how many it reached. Used by the
+ * admin page and by organizations. Without push configured it does nothing:
+ * phones still pick the alert up at their next check.
+ */
+export async function deliver(
+  b: Broadcast, to: Recipient[],
+  { broadcasts, devices, push }: { broadcasts: BroadcastStore; devices?: DeviceStore; push?: Push },
+): Promise<Broadcast> {
+  if (!devices || !push?.available) return b;
+  // A phone that is both a member's and inside the circle gets one push.
+  const unique = [...new Map(to.map((r) => [r.token, r])).values()];
+  const result = await push.send(unique.map((r) => {
+    const ar = r.lang === 'ar';
+    const where = r.zone ? (ar ? `منطقتك «${r.zone.name}»` : `Your zone "${r.zone.name}"`) : b.orgId ? '' : (ar ? 'موقعك الأخير' : 'Near your last location');
+    const title = ar && b.titleAr ? b.titleAr : b.title;
+    return {
+      token: r.token,
+      title: b.sender ? `${b.sender}: ${title}` : title,
+      body: [ar && b.messageAr ? b.messageAr : b.message, where].filter(Boolean).join('\n'),
+      data: { kind: 'broadcast', broadcastId: b.id, level: b.level, ...(r.zone && { zoneId: r.zone.id }) },
+      urgent: b.level === 'danger',
+    };
+  }));
+  for (const t of result.invalidTokens) devices.dropToken(t);
+  return broadcasts.setDelivery(b.id, unique.length, result.sent) ?? b;
 }
