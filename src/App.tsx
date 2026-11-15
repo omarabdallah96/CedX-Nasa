@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { lastWeek, rangeSummary, selectionVerdict, type DatasetIndex } from './lib/analysis.ts';
 import { AnalysisClient, pickDataSource, type DataSource } from './lib/client.ts';
 import { parseBox, type BoxFailure } from './lib/coords.ts';
@@ -19,7 +19,7 @@ import { SeasonChart } from './components/SeasonChart.tsx';
 import { TrustPanel } from './components/TrustPanel.tsx';
 import { shortcuts, Verdict } from './components/Verdict.tsx';
 import { LangSwitch, useI18n } from './i18n/index.tsx';
-import { ThemeSwitch } from './lib/theme.tsx';
+import { setNightStage, ThemeSwitch } from './lib/theme.tsx';
 
 const SEAM_YEAR = 2012;
 
@@ -98,6 +98,9 @@ export function App() {
       alive = false;
     };
   }, [client, source]);
+
+  // Before paint, so neither phase shows a frame in the other's theme.
+  useLayoutEffect(() => setNightStage(phase === 'intro'), [phase]);
 
   useEffect(() => {
     const target = phase === 'tool' ? `#/${slug}` : '';
@@ -232,42 +235,41 @@ export function App() {
 
   return (
     <div className="app" data-phase={phase}>
-      {index && (
-        <MapPanel
-          phase={phase}
-          view={globeView}
-          countries={index.countries}
-          slug={slug}
-          bbox={bbox}
-          drawing={drawing}
-          onDraw={applyBox}
-          onPick={open}
-          density={phase === 'tool' && !stale ? result?.data.density ?? null : null}
-          points={phase === 'tool' ? points : null}
-          dataUrl={source?.url ?? client.baseUrl}
-        />
+      {phase === 'tool' && index && (
+        <header className="head">
+          <a className="brand" href="#top" onClick={(e) => { e.preventDefault(); setPhase('intro'); setGlobeView('spin'); }}>
+            <img src="./favicon.svg" alt="" width={26} height={26} />
+            <span lang="en">{t.brand}</span>
+          </a>
+          <nav className="places-nav" aria-label={t.app.placeNav}>
+            {index.countries.map((c) => (
+              <button key={c.slug} type="button" aria-pressed={c.slug === slug} onClick={() => open(c.slug)}>{t.country(c.slug, c.name)}</button>
+            ))}
+          </nav>
+          <a className="head-link" href="#trust">{t.app.howItWorks}</a>
+          <ThemeSwitch />
+          <LangSwitch />
+        </header>
       )}
 
-      {phase === 'intro' && summary && story && cal && <Intro summary={summary} story={story} cal={cal} onView={setGlobeView} onOpen={open} />}
-      {phase === 'intro' && !(summary && story && cal) && <p className="boot">{t.app.loading}</p>}
-
-      {phase === 'tool' && index && cal && (
-        <>
-          <header className="head">
-            <a className="brand" href="#top" onClick={(e) => { e.preventDefault(); setPhase('intro'); setGlobeView('spin'); }}>
-              <img src="./favicon.svg" alt="" width={26} height={26} />
-              <span lang="en">{t.brand}</span>
-            </a>
-            <nav className="places-nav" aria-label={t.app.placeNav}>
-              {index.countries.map((c) => (
-                <button key={c.slug} type="button" aria-pressed={c.slug === slug} onClick={() => open(c.slug)}>{t.country(c.slug, c.name)}</button>
-              ))}
-            </nav>
-            <a className="head-link" href="#trust">{t.app.howItWorks}</a>
-            <ThemeSwitch />
-            <LangSwitch />
-          </header>
-
+      {/* One box for the map and the panel: the pinned map lets go where this box ends. */}
+      <div className="top">
+        {index && (
+          <MapPanel
+            phase={phase}
+            view={globeView}
+            countries={index.countries}
+            slug={slug}
+            bbox={bbox}
+            drawing={drawing}
+            onDraw={applyBox}
+            onPick={open}
+            density={phase === 'tool' && !stale ? result?.data.density ?? null : null}
+            points={phase === 'tool' ? points : null}
+            dataUrl={source?.url ?? client.baseUrl}
+          />
+        )}
+        {phase === 'tool' && index && cal && (
           <aside className="side" aria-busy={!analysis || stale}>
             {error ? (
               <div className="verdict" role="alert">
@@ -370,7 +372,14 @@ export function App() {
               </p>
             </form>
           </aside>
+        )}
+      </div>
 
+      {phase === 'intro' && summary && story && cal && <Intro summary={summary} story={story} cal={cal} onView={setGlobeView} onOpen={open} />}
+      {phase === 'intro' && !(summary && story && cal) && <p className="boot">{t.app.loading}</p>}
+
+      {phase === 'tool' && index && cal && (
+        <>
           {analysis && sel && series && steps && !empty && (
             <main className="main" data-stale={stale || undefined}>
               <section id="record" aria-labelledby="record-h">
