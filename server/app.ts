@@ -14,7 +14,7 @@ import { LiveUnavailableError, MAX_HOURS, type Live } from './live.ts';
 import { DANGER_CLASSES, dangerLevel } from './fwi.ts';
 import { FORECAST_DAYS, ForecastUnavailableError, nearestCell, type CountryForecast, type Forecast } from './forecast.ts';
 import { createRateLimit } from './ratelimit.ts';
-import { MAX_FIRES, MAX_RESOURCE_KM, SafetyUnavailableError, type Safety } from './safety.ts';
+import { HELP_KM, MAX_FIRES, MAX_RESOURCE_KM, SafetyUnavailableError, type Safety } from './safety.ts';
 import { createAdmin } from './admin.ts';
 import type { BroadcastStore } from './broadcasts.ts';
 import { MAX_ZONES, type AccountZone, type DeviceStore, type DeviceZone } from './devices.ts';
@@ -275,7 +275,8 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
         'DELETE /api/v1/devices/{installationId}',
         'GET /api/v1/me/zones         (Authorization: Bearer <token>)  alert zones saved to the account',
         'PUT /api/v1/me/zones         {zones}  (Authorization: Bearer <token>)',
-        'GET /api/v1/resources?lat=&lon=&radiusKm=   water, fire stations, hospitals, assembly points (OpenStreetMap)',
+        'GET /api/v1/resources?lat=&lon=&radiusKm=   water, civil defence, Red Cross, fire stations, hospitals, assembly points (OpenStreetMap)',
+        'GET /api/v1/help?lat=&lon=   nearest civil defence, Red Cross, hospitals and fire stations to a person',
         'GET /api/v1/escape?lat=&lon=&fires=lat,lon;lat,lon   routes away from the fires, downwind danger areas',
       ],
     });
@@ -598,6 +599,19 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     return c.json({
       center: at,
       radiusKm,
+      source: 'OpenStreetMap contributors (Overpass API)',
+      count: resources.length,
+      resources,
+    });
+  });
+
+  api.get('/help', async (c) => {
+    const at = point(c.req.query());
+    const resources = await needSafety().help(at).catch(safetyError);
+    c.header('Cache-Control', 'public, max-age=3600');
+    return c.json({
+      center: at,
+      radiusKm: HELP_KM,
       source: 'OpenStreetMap contributors (Overpass API)',
       count: resources.length,
       resources,

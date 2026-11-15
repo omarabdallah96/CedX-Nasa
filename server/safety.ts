@@ -1,5 +1,5 @@
-// Safety around a fire: what is nearby (water, fire stations, hospitals,
-// assembly points) and the fastest way out that does not drive into the fire.
+// Safety around a fire: what is nearby (water, civil defence, Red Cross, fire
+// stations, hospitals, assembly points) and the fastest way out that does not drive into the fire.
 //
 // Places come from OpenStreetMap through the Overpass API (free, no key).
 // The danger area is a teardrop around each fire, stretched downwind with the
@@ -10,12 +10,12 @@
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-export type ResourceKind = 'water' | 'fire_station' | 'hospital' | 'assembly_point' | 'town';
+export type ResourceKind = 'water' | 'civil_defense' | 'red_cross' | 'fire_station' | 'hospital' | 'assembly_point' | 'town';
 
 export interface Resource {
   id: string;
   kind: ResourceKind;
-  /** What it is exactly: hydrant, water_tank, suction_point, lake, reservoir, river, canal, city, town, village… */
+  /** What it is exactly: hydrant, water_tank, suction_point, lake, reservoir, river, canal, civil_defense, red_cross, ambulance_station, city, town, village… */
   detail: string;
   name: string | null;
   nameAr: string | null;
@@ -223,6 +223,37 @@ const WATER_DETAIL: Record<string, string> = {
   fire_water_pond: 'pond',
 };
 
+/**
+ * Civil defence and Red Cross centres carry no tag of their own in OpenStreetMap
+ * (they are fire stations, ambulance stations, clinics, offices…), so they are
+ * recognised by name or operator. Kept as strings: Overpass gets the same ones.
+ */
+const CIVIL_DEFENSE = 'civil defen[cs]e|d[eé]fen[cs]e civile?|civil protection|protec?ção civil|الدفاع المدني|دفاع مدني|πολιτική προστασία|πολιτική άμυνα';
+const RED_CROSS = 'red cross|croix.rouge|red crescent|cruz vermelha|الصليب ال[أا]حمر|الهلال ال[أا]حمر|ερυθρός σταυρός';
+const CIVIL_DEFENSE_RE = new RegExp(CIVIL_DEFENSE, 'i');
+const RED_CROSS_RE = new RegExp(RED_CROSS, 'i');
+
+/** Named or operated by civil defence or the Red Cross; streets named after them are left out. */
+function helpByName(at: string): string {
+  const both = `${CIVIL_DEFENSE}|${RED_CROSS}`;
+  return `  nwr["name"~"${both}",i]["highway"!~"."]${at};
+  nwr["name:en"~"${both}",i]["highway"!~"."]${at};
+  nwr["operator"~"${both}",i]["highway"!~"."]${at};
+  nwr["amenity"="civil_defence"]${at};
+  nwr["emergency"~"^(ambulance_station|disaster_response)$"]${at};`;
+}
+
+/** Only the places people go to for help: a light query that can reach far. */
+export function helpQuery(c: LatLon, radiusKm: number): string {
+  const at = `(around:${Math.round(radiusKm * 1000)},${c.lat},${c.lon})`;
+  return `[out:json][timeout:25];
+(
+${helpByName(at)}
+  nwr["amenity"~"^(fire_station|hospital)$"]${at};
+);
+out center tags;`;
+}
+
 export function overpassQuery(c: LatLon, radiusKm: number): string {
   const r = Math.round(radiusKm * 1000);
   const at = `(around:${r},${c.lat},${c.lon})`;
@@ -235,6 +266,7 @@ export function overpassQuery(c: LatLon, radiusKm: number): string {
   nwr["natural"="water"]["water"!~"wastewater|sewage"]${at};
   nwr["landuse"="reservoir"]${at};
   nwr["amenity"="fire_station"]${at};
+${helpByName(at)}
   nwr["amenity"~"^(hospital|clinic)$"]${at};
   nwr["emergency"="assembly_point"]${at};
   node["place"~"^(city|town|village)$"]${at};
@@ -256,6 +288,13 @@ interface OsmElement {
 
 function classify(tags: Record<string, string>): { kind: ResourceKind; detail: string } | null {
   if (tags.emergency && WATER_DETAIL[tags.emergency]) return { kind: 'water', detail: WATER_DETAIL[tags.emergency] };
+  if (!tags.highway && !tags.place && !tags.waterway && tags.natural !== 'water') {
+    const label = [tags.name, tags['name:en'], tags['name:ar'], tags.operator, tags.brand].filter(Boolean).join(' ; ');
+    if (tags.amenity === 'civil_defence' || tags.emergency === 'disaster_response' || CIVIL_DEFENSE_RE.test(label)) return { kind: 'civil_defense', detail: 'civil_defense' };
+    if (RED_CROSS_RE.test(label)) return { kind: 'red_cross', detail: 'red_cross' };
+    // In Lebanon nearly every ambulance station is a Red Cross one, named or not.
+    if (tags.emergency === 'ambulance_station') return { kind: 'red_cross', detail: 'ambulance_station' };
+  }
   if (tags.amenity === 'fire_station') return { kind: 'fire_station', detail: 'fire_station' };
   if (tags.amenity === 'hospital' || tags.amenity === 'clinic') return { kind: 'hospital', detail: tags.amenity };
   if (tags.emergency === 'assembly_point') return { kind: 'assembly_point', detail: 'assembly_point' };
@@ -267,9 +306,9 @@ function classify(tags: Record<string, string>): { kind: ResourceKind; detail: s
 }
 
 /** Most of each kind kept, nearest first. */
-const KEEP: Record<ResourceKind, number> = { water: 15, fire_station: 6, hospital: 6, assembly_point: 6, town: 25 };
+const KEEP: Record<ResourceKind, number> = { water: 15, civil_defense: 6, red_cross: 6, fire_station: 6, hospital: 6, assembly_point: 6, town: 25 };
 
-export function parseOverpass(json: unknown, c: LatLon, radiusKm: number): Resource[] {
+export function parseOverpass(json: unknown, c: LatLon, radiusKm: number, keep: number | null = null): Resource[] {
   const elements = ((json as { elements?: OsmElement[] })?.elements ?? []) as OsmElement[];
   const out: Resource[] = [];
   const seenRiver = new Map<string, Resource>();
@@ -317,7 +356,7 @@ export function parseOverpass(json: unknown, c: LatLon, radiusKm: number): Resou
   }
   out.sort((a, b) => a.distanceKm - b.distanceKm);
   const count: Partial<Record<ResourceKind, number>> = {};
-  return out.filter((r) => (count[r.kind] = (count[r.kind] ?? 0) + 1) <= KEEP[r.kind]);
+  return out.filter((r) => (count[r.kind] = (count[r.kind] ?? 0) + 1) <= (keep ?? KEEP[r.kind]));
 }
 
 // ---------- routing ----------
@@ -375,6 +414,10 @@ const MAX_CACHE = 400;
 /** Escape destinations are searched this far from the start. */
 export const ESCAPE_SEARCH_KM = 20;
 export const MAX_RESOURCE_KM = 25;
+/** "Nearest help" looks this far: civil defence and Red Cross centres are sparse on the map. */
+export const HELP_KM = 50;
+/** Nearest of each kind returned by help(). */
+const HELP_EACH = 3;
 export const MAX_FIRES = 200;
 
 async function defaultFetchJson(url: string, init?: FetchInit): Promise<unknown> {
@@ -412,15 +455,20 @@ export function createSafety({ fetchJson = defaultFetchJson, cacheDir, orsKey = 
   const windCache = new Map<string, { at: number; value: Promise<Wind | null> }>();
   const planCache = new Map<string, { at: number; value: Promise<EscapePlan> }>();
 
-  /** Everything within radiusKm, towns included. Cached per ~1 km cell. */
-  function places(c: LatLon, radiusKm: number): Promise<Resource[]> {
-    const q = { lat: round(c.lat, 2), lon: round(c.lon, 2) };
-    const key = `${q.lat},${q.lon},${radiusKm}`;
+  /**
+   * Everything within radiusKm, towns included. Cached per ~1 km cell.
+   * With `help`: only civil defence, Red Cross, fire stations and hospitals, per ~10 km cell.
+   */
+  function places(c: LatLon, radiusKm: number, help = false): Promise<Resource[]> {
+    const digits = help ? 1 : 2;
+    const q = { lat: round(c.lat, digits), lon: round(c.lon, digits) };
+    // "v2": civil defence and Red Cross became kinds of their own; older files lack them.
+    const key = `${help ? 'help' : 'v2'},${q.lat},${q.lon},${radiusKm}`;
     return cached(placeCache, key, RESOURCES_MS, now, async () => {
       const file = cacheDir ? path.join(cacheDir, `${key.replaceAll(',', '_')}.json`) : null;
       const saved = file ? await readSaved(file) : null;
       if (saved && now() - saved.at < DISK_FRESH_MS) return saved.places;
-      const body = `data=${encodeURIComponent(overpassQuery(q, radiusKm))}`;
+      const body = `data=${encodeURIComponent(help ? helpQuery(q, radiusKm) : overpassQuery(q, radiusKm))}`;
       const errors: string[] = [];
       for (const url of OVERPASS_URLS) {
         try {
@@ -430,7 +478,7 @@ export function createSafety({ fetchJson = defaultFetchJson, cacheDir, orsKey = 
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             timeoutMs: OVERPASS_TIMEOUT_MS,
           });
-          const found = parseOverpass(json, q, radiusKm);
+          const found = parseOverpass(json, q, radiusKm, help ? 60 : null);
           if (file) await save(file, found).catch((err) => console.error('safety: could not save places', err));
           return found;
         } catch (err) {
@@ -592,12 +640,26 @@ export function createSafety({ fetchJson = defaultFetchJson, cacheDir, orsKey = 
   return {
     routingProvider: orsKey ? 'OpenRouteService (avoid areas), OSRM fallback' : 'OSRM',
 
-    /** Water, fire stations, hospitals and assembly points around a point. */
+    /** Water, civil defence, Red Cross, fire stations, hospitals and assembly points around a point. */
     async resources(c: LatLon, radiusKm: number): Promise<Resource[]> {
       // One wider query per area serves every smaller radius from the cache.
       const fetchKm = radiusKm <= 10 ? 10 : MAX_RESOURCE_KM;
       const all = await places(c, fetchKm);
       return around(c, all, radiusKm).filter((r) => r.kind !== 'town');
+    },
+
+    /**
+     * The nearest civil defence centres, Red Cross centres, hospitals and fire
+     * stations to a person, up to three of each, nearest first.
+     */
+    async help(c: LatLon): Promise<Resource[]> {
+      // The cell centre can be 8 km from the person, so the query reaches a little farther.
+      const all = await places(c, HELP_KM + 10, true);
+      const count: Partial<Record<ResourceKind, number>> = {};
+      return around(c, all, HELP_KM).filter(
+        (r) => (r.kind === 'civil_defense' || r.kind === 'red_cross' || r.kind === 'fire_station' || (r.kind === 'hospital' && r.detail === 'hospital')) &&
+          (count[r.kind] = (count[r.kind] ?? 0) + 1) <= HELP_EACH,
+      );
     },
 
     /** Routes from `from` that lead away from `fires`; with no fires, exits in different directions. */

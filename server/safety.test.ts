@@ -12,6 +12,7 @@ import {
   destination,
   distanceKm,
   exposureKm,
+  helpQuery,
   insideRing,
   overpassQuery,
   parseOverpass,
@@ -91,6 +92,62 @@ describe('Overpass', () => {
     const river = got.find((r) => r.id === 'way/3')!;
     expect(river).toMatchObject({ kind: 'water', detail: 'river', lat: 33.85, lon: 35.92 });
     expect(got.find((r) => r.id === 'way/2')).toMatchObject({ detail: 'lake', nameAr: 'بحيرة' });
+  });
+});
+
+describe('civil defence and Red Cross', () => {
+  const json = {
+    elements: [
+      { type: 'node', id: 1, lat: 33.86, lon: 35.9, tags: { amenity: 'fire_station', name: 'الدفاع المدني بيت مري' } },
+      { type: 'node', id: 2, lat: 33.87, lon: 35.9, tags: { emergency: 'ambulance_station', name: 'Lebanese Red Cross EMS Station' } },
+      { type: 'node', id: 3, lat: 33.88, lon: 35.9, tags: { emergency: 'ambulance_station' } },
+      { type: 'node', id: 4, lat: 33.89, lon: 35.9, tags: { amenity: 'fire_station' } },
+      { type: 'way', id: 5, center: { lat: 33.9, lon: 35.9 }, tags: { highway: 'residential', name: 'Red Cross Street' } },
+      { type: 'node', id: 6, lat: 33.91, lon: 35.9, tags: { office: 'ngo', operator: 'الصليب الأحمر اللبناني' } },
+      { type: 'node', id: 7, lat: 33.92, lon: 35.9, tags: { amenity: 'hospital', name: 'Saint George' } },
+      { type: 'node', id: 8, lat: 33.93, lon: 35.9, tags: { amenity: 'clinic', name: 'Clinic' } },
+      { type: 'node', id: 9, lat: 34.2, lon: 35.9, tags: { name: 'Civil Defence Deir al Kamar' } },
+    ],
+  };
+
+  it('recognises them by tag, name or operator', () => {
+    const got = parseOverpass(json, FIRE, 10);
+    expect(got.map((r) => [r.id, r.kind, r.detail])).toEqual([
+      ['node/1', 'civil_defense', 'civil_defense'],
+      ['node/2', 'red_cross', 'red_cross'],
+      ['node/3', 'red_cross', 'ambulance_station'],
+      ['node/4', 'fire_station', 'fire_station'],
+      ['node/6', 'red_cross', 'red_cross'],
+      ['node/7', 'hospital', 'hospital'],
+      ['node/8', 'hospital', 'clinic'],
+    ]);
+    expect(overpassQuery(FIRE, 10)).toContain('الدفاع المدني');
+    expect(helpQuery(FIRE, 60)).not.toContain('waterway');
+  });
+
+  it('finds the nearest help far beyond the resource radius', async () => {
+    const bodies: string[] = [];
+    const safety = createSafety({
+      orsKey: '',
+      fetchJson: async (_url, init) => {
+        bodies.push(decodeURIComponent(init!.body!));
+        return json;
+      },
+    });
+    const got = await safety.help(FIRE);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain('around:60000');
+    // Clinics are left out; the centre 39 km away is still found.
+    expect(got.map((r) => r.id)).toEqual(['node/1', 'node/2', 'node/3', 'node/4', 'node/6', 'node/7', 'node/9']);
+    expect(got.at(-1)).toMatchObject({ kind: 'civil_defense' });
+    expect(got.at(-1)!.distanceKm).toBeGreaterThan(35);
+
+    const service = { index: async () => ({ countries: [] }) } as unknown as Service;
+    const app = createApp({ service, dataDir: '.', safety });
+    const res = await app.request(`/api/v1/help?lat=${FIRE.lat}&lon=${FIRE.lon}`);
+    expect(res.status).toBe(200);
+    expect((await res.json()).resources[0]).toMatchObject({ kind: 'civil_defense', bearingDeg: 0 });
+    expect((await app.request('/api/v1/help?lat=1')).status).toBe(400);
   });
 });
 
