@@ -13,6 +13,8 @@ import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from './admin-page.ts';
 import { createRateLimit } from './ratelimit.ts';
 import { LABELS, type ReportStore } from './reports.ts';
 import { normalizeEmail, PLANS, type AccountStore, type Plan } from './accounts.ts';
+import type { DeviceStore } from './devices.ts';
+import type { Push } from './push.ts';
 import { BROADCAST_LEVELS, MAX_HOURS, MAX_MESSAGE, MAX_RADIUS_KM, MAX_TITLE, type BroadcastLevel, type BroadcastStore } from './broadcasts.ts';
 
 const COOKIE = 'firesight_admin';
@@ -26,6 +28,9 @@ export interface AdminOptions {
   accounts?: AccountStore;
   /** Zone alerts sent to phones. */
   broadcasts?: BroadcastStore;
+  /** Phones registered for instant alerts, and the push sender. */
+  devices?: DeviceStore;
+  push?: Push;
   /** Who is asking, for the login limiter. */
   clientKey: (c: Context) => string;
   now?: () => number;
@@ -37,7 +42,7 @@ function sameSecret(a: string, b: string) {
   return timingSafeEqual(sha256(a), sha256(b));
 }
 
-export function createAdmin({ password = '', reports, accounts, broadcasts, clientKey, now = Date.now }: AdminOptions) {
+export function createAdmin({ password = '', reports, accounts, broadcasts, devices, push, clientKey, now = Date.now }: AdminOptions) {
   const app = new Hono();
   const configured = password.length > 0;
   const key = sha256(`firesight-admin-session:${password}`);
@@ -84,7 +89,7 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, clie
     signedIn: signedIn(c),
     labels: LABELS,
     levels: BROADCAST_LEVELS,
-    features: { accounts: !!accounts, broadcasts: !!broadcasts },
+    features: { accounts: !!accounts, broadcasts: !!broadcasts, push: !!push?.available },
   }));
 
   // State-changing requests must say they come from the page.
@@ -191,7 +196,19 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, clie
   // ---- Users: find an account, change its plan ----
   app.get('/admin/api/users', (c) => {
     const q = (c.req.query('q') ?? '').slice(0, 100);
-    return c.json(accounts!.search(q, 50));
+    const found = accounts!.search(q, 50);
+    // Each user's most recent phone: its last location and zones.
+    const phones = devices?.latestByUser(found.users.map((u) => u.id)) ?? new Map();
+    return c.json({
+      total: found.total,
+      users: found.users.map((u) => {
+        const d = phones.get(u.id);
+        return {
+          ...u,
+          phone: d ? { lastLocation: d.location, zones: d.zones.length, push: d.token !== null, seenAt: d.updatedAt } : null,
+        };
+      }),
+    });
   });
 
   app.post('/admin/api/users/plan', async (c) => {
@@ -210,7 +227,12 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, clie
   });
 
   // ---- Zone alerts: a message for phones whose zone overlaps a circle ----
-  app.get('/admin/api/broadcasts', (c) => c.json({ broadcasts: broadcasts!.recent(50), now: new Date(now()).toISOString() }));
+  app.get('/admin/api/broadcasts', (c) => c.json({
+    broadcasts: broadcasts!.recent(50),
+    now: new Date(now()).toISOString(),
+    phones: devices?.stats() ?? null,
+    push: !!push?.available,
+  }));
 
   app.post('/admin/api/broadcasts', async (c) => {
     let b: Record<string, unknown>;
@@ -244,7 +266,24 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, clie
     if (lat === null || lon === null) return fail(c, 400, 'bad_place', 'Latitude and longitude must be decimal degrees.');
     if (radiusKm === null) return fail(c, 400, 'bad_radius', `The radius must be 0.5 to ${MAX_RADIUS_KM} km.`);
     if (hours === null) return fail(c, 400, 'bad_hours', `It can stay active 1 to ${MAX_HOURS} hours.`);
-    const sent = broadcasts!.add({ title, message, titleAr, messageAr, level, lat, lon, radiusKm, hours });
+    let sent = broadcasts!.add({ title, message, titleAr, messageAr, level, lat, lon, radiusKm, hours });
+    // Instant: push to every phone whose zone overlaps the circle or whose last location is inside.
+    if (devices && push?.available) {
+      const to = devices.recipients({ lat, lon, radiusKm });
+      const result = await push.send(to.map((r) => {
+        const ar = r.lang === 'ar';
+        const where = r.zone ? (ar ? `منطقتك «${r.zone.name}»` : `Your zone "${r.zone.name}"`) : (ar ? 'موقعك الأخير' : 'Near your last location');
+        return {
+          token: r.token,
+          title: ar && titleAr ? titleAr : title,
+          body: `${ar && messageAr ? messageAr : message}\n${where}`,
+          data: { kind: 'broadcast', broadcastId: sent.id, level, ...(r.zone && { zoneId: r.zone.id }) },
+          urgent: level === 'danger',
+        };
+      }));
+      for (const t of result.invalidTokens) devices.dropToken(t);
+      sent = broadcasts!.setDelivery(sent.id, to.length, result.sent) ?? sent;
+    }
     return c.json({ broadcast: sent }, 201);
   });
 

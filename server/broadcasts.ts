@@ -43,6 +43,8 @@ export interface Broadcast {
   createdAt: string;
   expiresAt: string;
   cancelled: boolean;
+  /** Phones the push went to, and how many FCM accepted. Null before sending. */
+  pushed: { recipients: number; delivered: number } | null;
 }
 
 interface Row {
@@ -58,6 +60,8 @@ interface Row {
   created_at: string;
   expires_at: string;
   cancelled: number;
+  recipients: number | null;
+  delivered: number | null;
 }
 
 const toBroadcast = (r: Row): Broadcast => ({
@@ -73,6 +77,7 @@ const toBroadcast = (r: Row): Broadcast => ({
   createdAt: r.created_at,
   expiresAt: r.expires_at,
   cancelled: r.cancelled === 1,
+  pushed: r.recipients === null ? null : { recipients: r.recipients, delivered: r.delivered ?? 0 },
 });
 
 export interface BroadcastStore {
@@ -82,6 +87,7 @@ export interface BroadcastStore {
   /** Newest first, for the admin page. */
   recent(limit: number): Broadcast[];
   cancel(id: string): Broadcast | null;
+  setDelivery(id: string, recipients: number, delivered: number): Broadcast | null;
   /** Deletes alerts that ended more than 30 days ago. */
   prune(): number;
   close(): void;
@@ -110,6 +116,10 @@ export function createBroadcastStore(dir: string, { now = Date.now }: { now?: ()
     );
     CREATE INDEX IF NOT EXISTS broadcasts_expires ON broadcasts (expires_at);
   `);
+  // Columns added after the first release.
+  const columns = new Set((db.prepare('PRAGMA table_info(broadcasts)').all() as unknown as { name: string }[]).map((c) => c.name));
+  if (!columns.has('recipients')) db.exec('ALTER TABLE broadcasts ADD COLUMN recipients INTEGER');
+  if (!columns.has('delivered')) db.exec('ALTER TABLE broadcasts ADD COLUMN delivered INTEGER');
   const iso = (ms: number) => new Date(ms).toISOString();
   const byId = db.prepare('SELECT * FROM broadcasts WHERE id = ?');
 
@@ -135,6 +145,12 @@ export function createBroadcastStore(dir: string, { now = Date.now }: { now?: ()
 
     cancel(id) {
       db.prepare('UPDATE broadcasts SET cancelled = 1 WHERE id = ?').run(id);
+      const row = byId.get(id) as Row | undefined;
+      return row ? toBroadcast(row) : null;
+    },
+
+    setDelivery(id, recipients, delivered) {
+      db.prepare('UPDATE broadcasts SET recipients = ?, delivered = ? WHERE id = ?').run(recipients, delivered, id);
       const row = byId.get(id) as Row | undefined;
       return row ? toBroadcast(row) : null;
     },

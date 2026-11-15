@@ -16,6 +16,8 @@ import { FORECAST_DAYS, ForecastUnavailableError, nearestCell, type CountryForec
 import { createRateLimit } from './ratelimit.ts';
 import { createAdmin } from './admin.ts';
 import type { BroadcastStore } from './broadcasts.ts';
+import { MAX_ZONES, type DeviceStore, type DeviceZone } from './devices.ts';
+import type { Push } from './push.ts';
 import { AccountError, MAX_NAME, MAX_PASSWORD, MIN_PASSWORD, normalizeEmail, type AccountStore, type User } from './accounts.ts';
 import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
 import { lastWeek, rangeSummary, selectionVerdict, type RangeSummary } from '../src/lib/analysis.ts';
@@ -98,6 +100,9 @@ export interface AppOptions {
   authPer15Min?: number;
   /** Zone alerts sent from the admin page; /broadcasts answers 503 without it. */
   broadcasts?: BroadcastStore;
+  /** Phones registered for instant (push) alerts; /devices answers 503 without it. */
+  devices?: DeviceStore;
+  push?: Push;
 }
 
 /** Arabic names, from pipeline/config.mjs. */
@@ -124,13 +129,13 @@ function clientKey(c: Context): string {
   }
 }
 
-export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts }: AppOptions) {
+export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts, devices, push }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
   api.use('*', cors({
     origin: '*',
-    allowMethods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'X-Report-Token', 'Authorization'],
     maxAge: 86400,
   }));
@@ -261,6 +266,8 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
         'POST /api/v1/auth/logout',
         'DELETE /api/v1/auth/me       {password}',
         'GET /api/v1/broadcasts       (active zone alerts)',
+        'PUT /api/v1/devices          {installationId, token?, platform, lang, location?, zones}  (instant alerts)',
+        'DELETE /api/v1/devices/{installationId}',
       ],
     });
   });
@@ -836,6 +843,68 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     return c.json({ broadcasts: broadcasts.active() });
   });
 
+  // ---- Phones that turned on instant alerts: push token, zones, last location ----
+  const needDevices = () => {
+    if (!devices) throw new ApiError(503, 'devices_unavailable', 'Instant alerts are not enabled on this server.');
+    return devices;
+  };
+
+  api.put('/devices', bodyLimit({
+    maxSize: 64 * 1024,
+    onError: () => { throw new ApiError(413, 'too_large', 'Too much data.'); },
+  }), async (c) => {
+    const store = needDevices();
+    let b: Record<string, unknown>;
+    try {
+      b = await c.req.json();
+    } catch {
+      throw new ApiError(400, 'bad_body', 'Send JSON.');
+    }
+    const installationId = b.installationId;
+    if (typeof installationId !== 'string' || !SAFE_ID.test(installationId)) {
+      throw new ApiError(400, 'bad_parameter', 'installationId must be 4–64 letters, digits, - or _.');
+    }
+    const token = b.token === null || b.token === undefined ? null : b.token;
+    if (token !== null && (typeof token !== 'string' || token.length < 20 || token.length > 4096)) {
+      throw new ApiError(400, 'bad_parameter', 'token must be an FCM registration token.');
+    }
+    const okNum = (v: unknown, max: number) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= max;
+    let location: { lat: number; lon: number; at: string } | null = null;
+    const loc = b.location as Record<string, unknown> | null | undefined;
+    if (loc) {
+      if (!okNum(loc.lat, 90) || !okNum(loc.lon, 180)) throw new ApiError(400, 'bad_parameter', 'location needs lat and lon.');
+      const at = typeof loc.at === 'string' && !Number.isNaN(Date.parse(loc.at)) ? new Date(Math.min(Date.parse(loc.at), Date.now())).toISOString() : new Date().toISOString();
+      location = { lat: loc.lat as number, lon: loc.lon as number, at };
+    }
+    if (!Array.isArray(b.zones) || b.zones.length > MAX_ZONES) throw new ApiError(400, 'bad_parameter', `zones must be a list of at most ${MAX_ZONES}.`);
+    const zones: DeviceZone[] = b.zones.map((z: Record<string, unknown>) => {
+      if (!z || typeof z.id !== 'string' || z.id.length > 64 || typeof z.name !== 'string' || z.name.length > 60 ||
+        !okNum(z.lat, 90) || !okNum(z.lon, 180) || !okNum(z.radiusKm, 200) || (z.radiusKm as number) <= 0) {
+        throw new ApiError(400, 'bad_parameter', 'Each zone needs id, name, lat, lon and radiusKm.');
+      }
+      return { id: z.id, name: z.name, lat: z.lat as number, lon: z.lon as number, radiusKm: z.radiusKm as number };
+    });
+    // Signed in: link the phone to the account (the admin sees its last location).
+    const authToken = /^Bearer\s+([A-Za-z0-9_-]{20,100})$/.exec(c.req.header('authorization') ?? '')?.[1];
+    const user = authToken && accounts ? accounts.authenticate(authToken) : null;
+    const saved = store.upsert({
+      installationId,
+      token: token as string | null,
+      platform: b.platform === 'android' || b.platform === 'ios' ? b.platform : 'other',
+      lang: b.lang === 'ar' ? 'ar' : 'en',
+      userId: user?.id ?? null,
+      location,
+      zones,
+    });
+    c.header('Cache-Control', 'no-store');
+    return c.json({ ok: true, push: !!push?.available, zones: saved.zones.length });
+  });
+
+  api.delete('/devices/:id', (c) => {
+    needDevices().remove(c.req.param('id'));
+    return c.json({ deleted: true });
+  });
+
   // ---- Accounts (optional: the app works as a guest) ----
   const authLimiter = createRateLimit({ limit: authPer15Min, windowMs: 15 * 60_000 });
   const needAccounts = () => {
@@ -947,6 +1016,7 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     const password = readPassword(await jsonBody(c), false);
     await store.login({ email: user.email, password }).catch(accountError);
     store.remove(user.id);
+    devices?.unlinkUser(user.id);
     return c.json({ deleted: true });
   });
 
@@ -961,7 +1031,7 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
   app.get('/api/v1/', (c) => c.redirect('/api/v1'));
   app.route('/api/v1', api);
   app.all('/api/*', (c) => c.json({ error: { code: 'not_found', message: 'The API lives under /api/v1.' } }, 404));
-  app.route('/', createAdmin({ password: adminPassword, reports, accounts, broadcasts, clientKey }));
+  app.route('/', createAdmin({ password: adminPassword, reports, accounts, broadcasts, devices, push, clientKey }));
   if (siteDir) app.use('*', serveStatic({ root: path.relative(process.cwd(), siteDir) || '.' }));
   return app;
 }

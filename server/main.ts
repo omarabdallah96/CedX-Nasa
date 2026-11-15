@@ -9,6 +9,8 @@ import type { DatasetIndex } from '../src/lib/analysis.ts';
 import { createService } from '../src/lib/service.ts';
 import { createAccountStore } from './accounts.ts';
 import { createBroadcastStore } from './broadcasts.ts';
+import { createDeviceStore } from './devices.ts';
+import { createPush, parseServiceAccount } from './push.ts';
 import { createApp } from './app.ts';
 import { createForecast } from './forecast.ts';
 import { createLive } from './live.ts';
@@ -41,6 +43,9 @@ const reports = createReportStore(storageDir);
 const accounts = createAccountStore(storageDir);
 // Zone alerts sent from /admin.
 const broadcasts = createBroadcastStore(storageDir);
+// Phones that turned on instant alerts, and Firebase Cloud Messaging to reach them.
+const devices = createDeviceStore(storageDir);
+const push = createPush({ account: parseServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT) });
 const live = createLive();
 // Fire weather moisture codes are kept with the reports so restarts do not redo the run-up.
 const forecast = createForecast({ stateDir: path.join(storageDir, 'forecast') });
@@ -56,6 +61,8 @@ const app = createApp({
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
   accounts,
   broadcasts,
+  devices,
+  push,
   authPer15Min: Number(process.env.AUTH_PER_15_MIN ?? 20),
 });
 const port = Number(process.env.PORT) || 8787;
@@ -65,6 +72,7 @@ serve({ fetch: app.fetch, port }, (info) => {
   console.log(`reports: stored in ${storageDir}`);
   if (!live.available) console.log('live: FIRMS_MAP_KEY is not set, /live answers 503');
   if (!process.env.ADMIN_PASSWORD) console.log('admin: ADMIN_PASSWORD is not set, /admin is off');
+  console.log(push.available ? `push: Firebase project ${push.projectId}` : 'push: FIREBASE_SERVICE_ACCOUNT is not set, zone alerts are not pushed');
   startRefresh(service);
   // Fire danger forecast: computed once now, then again on demand every few hours.
   if (process.env.FORECAST_WARM !== '0') setTimeout(() => void forecast.warm(), 5_000).unref();
@@ -78,5 +86,6 @@ serve({ fetch: app.fetch, port }, (info) => {
   setInterval(() => {
     accounts.prune();
     broadcasts.prune();
+    devices.prune();
   }, 86_400_000).unref();
 });

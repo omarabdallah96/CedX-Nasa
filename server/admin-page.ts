@@ -70,7 +70,8 @@ export const ADMIN_HTML = `<!doctype html>
    <div id="tab-alerts" hidden>
     <form id="alert-form" class="card form">
       <h2>Send a zone alert</h2>
-      <p class="muted">Phones whose alert zone overlaps this circle, or that are inside it, get a notification at their next check (within minutes when the app is open, up to 3 hours in the background).</p>
+      <p class="muted">Pushed right away to every phone whose alert zone overlaps this circle, or whose last location is inside it. Phones without push pick it up at their next check.</p>
+      <p id="a-phones" class="phones"></p>
       <div class="grid2">
         <label>Title (English)<input id="a-title" maxlength="80" required placeholder="Wildfire near Qornet es Saouda"></label>
         <label>Title (Arabic, optional)<input id="a-title-ar" maxlength="80" dir="rtl"></label>
@@ -201,6 +202,8 @@ textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px 
 .form .row #a-send { margin-left: auto; }
 .alert-item, .user-item { padding: 12px 14px; display: grid; gap: 6px; }
 .alert-item.over { opacity: .6; }
+.phones { font-size: 13.5px; }
+.phones .off { color: var(--danger); }
 .badge.danger { color: var(--danger); }
 .badge.warning { color: var(--accent); }
 .badge.pro { color: var(--ok); }
@@ -444,6 +447,7 @@ function renderAlert(b, now) {
       el('a', { href: 'https://www.openstreetmap.org/?mlat=' + b.lat + '&mlon=' + b.lon + '#map=11/' + b.lat + '/' + b.lon,
         target: '_blank', rel: 'noopener noreferrer', text: b.lat.toFixed(4) + ', ' + b.lon.toFixed(4) + ' · ' + b.radiusKm + ' km' }),
       el('span', { class: 'muted', text: 'sent ' + when(b.createdAt) }),
+      b.pushed ? el('span', { class: 'muted', text: 'pushed to ' + b.pushed.delivered + ' of ' + b.pushed.recipients + ' phone(s)' }) : null,
       over ? null : el('button', { class: 'danger', text: 'Cancel', onclick: (e) => cancelAlert(b, e.target) }),
     ]),
   ]);
@@ -451,7 +455,13 @@ function renderAlert(b, now) {
 
 async function loadAlerts() {
   try {
-    const { broadcasts, now } = await call('GET', '/admin/api/broadcasts');
+    const { broadcasts, now, phones, push } = await call('GET', '/admin/api/broadcasts');
+    const line = $('a-phones');
+    line.replaceChildren(
+      push ? el('span', { text: 'Push is on. ' }) : el('span', { class: 'off', text: 'Push is off (FIREBASE_SERVICE_ACCOUNT not set). ' }),
+      phones ? el('span', { class: 'muted', text: phones.withPush + ' phone(s) can receive push · ' + phones.zones + ' zone(s) on ' +
+        phones.withZones + ' phone(s) · ' + phones.withLocation + ' with a last location' }) : null,
+    );
     $('alerts').replaceChildren(...broadcasts.map((b) => renderAlert(b, now)));
     $('alerts-empty').hidden = broadcasts.length > 0;
   } catch (e) { if (e.message !== 'Signed out') toast(e.message); }
@@ -470,9 +480,9 @@ async function sendAlert(e) {
   if (!confirm('Send "' + body.title + '" to phones within ' + body.radiusKm + ' km of ' + body.lat + ', ' + body.lon + '?')) return;
   $('a-send').disabled = true;
   try {
-    await call('POST', '/admin/api/broadcasts', body);
+    const { broadcast } = await call('POST', '/admin/api/broadcasts', body);
     for (const id of ['a-title', 'a-title-ar', 'a-message', 'a-message-ar']) $(id).value = '';
-    toast('Alert sent.');
+    toast(broadcast.pushed ? 'Alert sent. Pushed to ' + broadcast.pushed.delivered + ' of ' + broadcast.pushed.recipients + ' phone(s).' : 'Alert sent. Phones pick it up at their next check.');
     loadAlerts();
   } catch (err) { $('a-error').textContent = err.message; }
   finally { $('a-send').disabled = false; }
@@ -488,6 +498,8 @@ async function cancelAlert(b, btn) {
 // ---- Users ----
 function renderUser(u) {
   const pro = u.plan === 'pro';
+  const ph = u.phone;
+  const loc = ph && ph.lastLocation;
   return el('li', { class: 'card user-item' }, [
     el('div', { class: 'row' }, [
       el('b', { text: u.email }),
@@ -496,6 +508,12 @@ function renderUser(u) {
       el('span', { class: 'muted', text: 'joined ' + when(u.createdAt) }),
       el('button', { text: pro ? 'Set to Free' : 'Give Pro', onclick: (e) => setPlan(u, pro ? 'free' : 'pro', e.target) }),
     ]),
+    el('div', { class: 'row' }, ph ? [
+      loc ? el('a', { href: 'https://www.openstreetmap.org/?mlat=' + loc.lat + '&mlon=' + loc.lon + '#map=12/' + loc.lat + '/' + loc.lon,
+        target: '_blank', rel: 'noopener noreferrer', text: 'last location ' + loc.lat.toFixed(3) + ', ' + loc.lon.toFixed(3) + ' (' + when(loc.at) + ')' })
+        : el('span', { class: 'muted', text: 'no location shared' }),
+      el('span', { class: 'muted', text: ph.zones + ' zone(s) · push ' + (ph.push ? 'on' : 'off') + ' · seen ' + when(ph.seenAt) }),
+    ] : [el('span', { class: 'muted', text: 'Instant alerts not turned on' })]),
   ]);
 }
 
