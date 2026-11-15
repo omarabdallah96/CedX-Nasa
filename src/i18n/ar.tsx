@@ -93,6 +93,7 @@ export const ar: Strings = {
   dir: 'rtl',
   brand: 'Firesight',
   switchTo: { lang: 'en', label: 'English', aria: 'View the site in English' },
+  theme: { light: 'التبديل إلى المظهر الفاتح', dark: 'التبديل إلى المظهر الداكن' },
 
   months: MONTHS,
   monthsLong: MONTHS_LONG,

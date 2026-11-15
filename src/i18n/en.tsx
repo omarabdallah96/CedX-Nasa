@@ -39,6 +39,8 @@ export const en = {
   brand: 'Firesight',
   /** The button that switches to the other language, worded in that language. */
   switchTo: { lang: 'ar' as Lang, label: 'العربية', aria: 'عرض الموقع بالعربية' },
+  /** Labels the theme button by what it switches to. */
+  theme: { light: 'Switch to light theme', dark: 'Switch to dark theme' },
 
   months: MONTHS,
   monthsLong: MONTHS_LONG,

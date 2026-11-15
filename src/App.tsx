@@ -19,6 +19,7 @@ import { SeasonChart } from './components/SeasonChart.tsx';
 import { TrustPanel } from './components/TrustPanel.tsx';
 import { shortcuts, Verdict } from './components/Verdict.tsx';
 import { LangSwitch, useI18n } from './i18n/index.tsx';
+import { ThemeSwitch } from './lib/theme.tsx';
 
 const SEAM_YEAR = 2012;
 
@@ -263,6 +264,7 @@ export function App() {
               ))}
             </nav>
             <a className="head-link" href="#trust">{t.app.howItWorks}</a>
+            <ThemeSwitch />
             <LangSwitch />
           </header>
 

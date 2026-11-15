@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
+    <!-- Theme before first paint: the visitor's choice, else the system setting. -->
+    <script>try{var t=localStorage.getItem('firesight.theme')}catch(e){}document.documentElement.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'</script>
     <meta name="description" content="Firesight: 25 years of NASA MODIS and VIIRS fire hotspots, stitched into one record. Pick a place and ask: is this normal?" />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <title>Firesight</title>

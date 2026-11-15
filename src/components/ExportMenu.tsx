@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Analysis } from '../lib/analysis.ts';
 import { useI18n } from '../i18n/index.tsx';
 import type { AnalysisClient } from '../lib/client.ts';
-import { ember, inkOn, rampPosition } from '../lib/color.ts';
+import { cssVar, ember, inkOn, rampPosition, SERIES } from '../lib/color.ts';
 import { fmtCompact } from '../lib/format.ts';
 import { SRC_N20, type Filters } from '../lib/harmonize.ts';
 import { annualTotals, monthMatrix } from '../lib/stats.ts';
@@ -27,7 +27,6 @@ interface Props {
 }
 
 const SOURCE = ['none', 'terra-scaled', 'modis-scaled', 'viirs', 'modis-gap-fill', 'noaa20'];
-const BG = '#0e0c0a';
 // Arabic falls through to the Arabic faces; Latin text and digits keep the first one.
 const SANS = '"IBM Plex Sans", "IBM Plex Sans Arabic", system-ui, sans-serif';
 const MONO = '"IBM Plex Mono", "IBM Plex Sans Arabic", ui-monospace, monospace';
@@ -68,17 +67,17 @@ function cardHeader(ctx: CanvasRenderingContext2D, W: number, rtl: boolean, eyeb
   const x = rtl ? W - 80 : 80;
   ctx.direction = rtl ? 'rtl' : 'ltr';
   ctx.textAlign = rtl ? 'right' : 'left';
-  ctx.fillStyle = '#8c8274';
+  ctx.fillStyle = cssVar('--ink-3');
   ctx.font = `500 26px ${SANS}`;
   ctx.fillText(eyebrow.toUpperCase(), x, 96);
-  ctx.fillStyle = '#f3ede4';
+  ctx.fillStyle = cssVar('--ink');
   ctx.font = `500 68px ${DISPLAY}`;
   let y = 190;
   for (const l of wrapText(ctx, headline, W - 160)) {
     ctx.fillText(l, x, y);
     y += rtl ? 92 : 78;
   }
-  ctx.fillStyle = '#c4b9a8';
+  ctx.fillStyle = cssVar('--ink-2');
   ctx.font = `400 30px ${SANS}`;
   y += 6;
   for (const l of wrapText(ctx, detail, W - 160)) {
@@ -169,12 +168,12 @@ export function ExportMenu({ client, slug, filters, analysis, cal, sel, period, 
     card.height = H;
     const ctx = card.getContext('2d');
     if (!ctx) return setStatus(t.exp.noImage);
-    ctx.fillStyle = BG;
+    ctx.fillStyle = cssVar('--page');
     ctx.fillRect(0, 0, W, H);
     const y = cardHeader(ctx, W, rtl, eyebrow, headline, detail);
     const side = Math.min(W - 160, H - y - 130);
     ctx.drawImage(rings, (W - side) / 2, y + 20, side, side);
-    ctx.fillStyle = '#8c8274';
+    ctx.fillStyle = cssVar('--ink-3');
     ctx.font = `400 22px ${SANS}`;
     ctx.fillText(t.exp.ringsFooter(cal.year[FIRST_DAY]), rtl ? W - 80 : 80, H - 56);
     toPng(card, `${fileSlug}_rings_${sel.year}-${String(sel.month + 1).padStart(2, '0')}.png`, t.exp.savedRings);
@@ -196,7 +195,7 @@ export function ExportMenu({ client, slug, filters, analysis, cal, sel, period, 
     card.height = H;
     const ctx = card.getContext('2d');
     if (!ctx) return setStatus(t.exp.noImage);
-    ctx.fillStyle = BG;
+    ctx.fillStyle = cssVar('--page');
     ctx.fillRect(0, 0, W, H);
     cardHeader(ctx, W, rtl, eyebrow, headline, detail);
     // The table is laid out left to right, then mirrored for right-to-left
@@ -213,7 +212,7 @@ export function ExportMenu({ client, slug, filters, analysis, cal, sel, period, 
     const maxTotal = Math.max(...totals.map((t) => t.total));
     ctx.textBaseline = 'middle';
     ctx.font = `500 ${rtl ? 16 : 18}px ${SANS}`;
-    ctx.fillStyle = '#8c8274';
+    ctx.fillStyle = cssVar('--ink-3');
     ctx.textAlign = 'center';
     t.months.forEach((m, i) => ctx.fillText(m, mx(x0 + i * cw + cw / 2 - 2), top + ROW / 2));
     ctx.textAlign = start;
@@ -222,7 +221,7 @@ export function ExportMenu({ client, slug, filters, analysis, cal, sel, period, 
     [...mm.years.keys()].reverse().forEach((yi, r) => {
       const y = top + (r + 1) * ROW;
       ctx.font = `500 18px ${MONO}`;
-      ctx.fillStyle = '#c4b9a8';
+      ctx.fillStyle = cssVar('--ink-2');
       ctx.textAlign = start;
       ctx.fillText(String(mm.years[yi]), mx(80), y + ROW / 2);
       mm.values[yi].forEach((v, m) => {
@@ -237,19 +236,19 @@ export function ExportMenu({ client, slug, filters, analysis, cal, sel, period, 
         ctx.textAlign = 'center';
         ctx.fillText(fmtCompact(v), mx(x0 + m * cw + cw / 2 - 2), y + ROW / 2 + 1);
       });
-      ctx.fillStyle = '#199e70';
+      ctx.fillStyle = SERIES.harmonized;
       ctx.beginPath();
       const bar = Math.max(2, (totals[yi].total / maxTotal) * barW);
       ctx.roundRect(mx(barX, bar), y + 9, bar, ROW - 18, rtl ? [4, 0, 0, 4] : [0, 4, 4, 0]);
       ctx.fill();
-      ctx.fillStyle = '#c4b9a8';
+      ctx.fillStyle = cssVar('--ink-2');
       ctx.textAlign = start;
       ctx.direction = 'ltr';
       ctx.font = `500 15px ${MONO}`;
       ctx.fillText(fmtCompact(totals[yi].total) + (totals[yi].complete ? '' : '*'), mx(barX + bar + 8), y + ROW / 2 + 1);
       ctx.direction = rtl ? 'rtl' : 'ltr';
     });
-    ctx.fillStyle = '#8c8274';
+    ctx.fillStyle = cssVar('--ink-3');
     ctx.font = `400 22px ${SANS}`;
     ctx.textAlign = start;
     ctx.fillText(t.exp.calendarFooter, mx(80), H - 56);
