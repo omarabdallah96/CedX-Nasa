@@ -3,6 +3,7 @@ import type { Analysis } from '../lib/analysis.ts';
 import { useI18n } from '../i18n/index.tsx';
 import { ember, inkOn, rampPosition, SERIES } from '../lib/color.ts';
 import { fmtCompact } from '../lib/format.ts';
+import { useTheme } from '../lib/theme.tsx';
 import type { SeamMode } from '../lib/types.ts';
 import type { Selection } from './FireRings.tsx';
 
@@ -16,6 +17,8 @@ interface Props {
 
 export function BurnCalendar({ analysis, mode, sel, onSelect, seamYear }: Props) {
   const { t } = useI18n();
+  // Cell colours come from the theme's ramp, so re-render when it changes.
+  useTheme();
   const mm = mode === 'harmonized' ? analysis.monthsH : analysis.monthsNaive;
   const wrap = useRef<HTMLDivElement>(null);
   const cells = useRef(new Map<string, HTMLButtonElement>());

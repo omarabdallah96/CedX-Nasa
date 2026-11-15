@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { useI18n } from '../i18n/index.tsx';
 import { rampPosition } from '../lib/color.ts';
 import { dayAt, drawRings, ringsGeometry } from '../lib/rings.ts';
+import { useTheme } from '../lib/theme.tsx';
 import { FIRST_DAY, type Calendar } from '../lib/time.ts';
 import { useSize } from './useSize.ts';
 
@@ -34,6 +35,7 @@ export interface FireRingsHandle {
 export const FireRings = forwardRef<FireRingsHandle, Props>(function FireRings(props, ref) {
   const { daily, cal, max, sel, onSelect, title, describe, seamYear } = props;
   const { t: words } = useI18n();
+  const theme = useTheme();
   const months = words.months;
   const wrap = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -104,7 +106,7 @@ export const FireRings = forwardRef<FireRingsHandle, Props>(function FireRings(p
     };
     // sel is split into primitives; g is derived from size and cal
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [daily, cal, max, size, sel.year, sel.month, title, seamYear, fontsReady, months]);
+  }, [daily, cal, max, size, sel.year, sel.month, title, seamYear, fontsReady, months, theme]);
 
   const locate = (e: React.PointerEvent | React.MouseEvent): number | null => {
     const rect = canvasRef.current!.getBoundingClientRect();

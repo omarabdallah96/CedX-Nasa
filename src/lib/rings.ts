@@ -1,7 +1,7 @@
 // Canvas renderer for the Fire Rings: one ring per year, one step per day,
 // clockwise from 1 January at the top. Shared by the tool and the intro story.
 
-import { EMBER, ember } from './color.ts';
+import { cssVar, ember, ramp } from './color.ts';
 import { dayIndex, FIRST_DAY, MONTHS, type Calendar } from './time.ts';
 
 const LEVELS = 48;
@@ -85,7 +85,7 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
 
   // Base rings: zero activity, only where the record has coverage and has been revealed.
   ctx.lineWidth = Math.max(1, th - 0.7);
-  ctx.strokeStyle = EMBER[0];
+  ctx.strokeStyle = ramp()[0];
   for (let y = firstYear; y <= lastShown; y++) {
     const n = daysInYear(y);
     const from = y === firstYear ? cal.doy[FIRST_DAY] : 0;
@@ -116,8 +116,15 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
     ctx.stroke();
   }
 
-  // Month spokes.
-  ctx.strokeStyle = 'rgba(14, 12, 10, 0.55)';
+  // Colours follow the theme's stylesheet tokens.
+  const page = cssVar('--page');
+  const ink = cssVar('--ink');
+  const ink2 = cssVar('--ink-2');
+  const ink3 = cssVar('--ink-3');
+
+  // Month spokes: thin cuts of page colour.
+  ctx.strokeStyle = page;
+  ctx.globalAlpha = 0.55;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let m = 0; m < 12; m++) {
@@ -126,10 +133,12 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
     ctx.lineTo(c + R * Math.cos(a), c + R * Math.sin(a));
   }
   ctx.stroke();
+  ctx.globalAlpha = 1;
 
   // Seam: the ring boundary where VIIRS takes over.
   if (lastShown >= o.seamYear) {
-    ctx.strokeStyle = 'rgba(243, 237, 228, 0.6)';
+    ctx.strokeStyle = ink;
+    ctx.globalAlpha = 0.6;
     ctx.setLineDash([2, 4]);
     ctx.lineDashOffset = -(o.seamPhase ?? 0);
     ctx.beginPath();
@@ -137,10 +146,11 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.lineDashOffset = 0;
+    ctx.globalAlpha = 1;
   }
 
   // Month labels.
-  ctx.fillStyle = '#8c8274';
+  ctx.fillStyle = ink3;
   ctx.font = `500 ${size < 360 ? 9 : 11}px ${SANS}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -159,9 +169,11 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
   for (let y = firstYear; y <= lastShown; y += 5) {
     const label = String(y);
     const w = ctx.measureText(label).width;
-    ctx.fillStyle = 'rgba(14, 12, 10, 0.78)';
+    ctx.fillStyle = page;
+    ctx.globalAlpha = 0.78;
     ctx.fillRect(c + 2, c - radius(y) - 6, w + 5, 12);
-    ctx.fillStyle = '#c4b9a8';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = ink2;
     ctx.fillText(label, c + 4.5, c - radius(y) + 0.5);
   }
 
@@ -172,7 +184,7 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
     const a0 = TOP + (TAU * (dayIndex(sel.year, sel.month + 1, 1) - jan1)) / n;
     const a1 = TOP + (TAU * (dayIndex(sel.year, sel.month + 2, 1) - jan1)) / n;
     const ri = r0 + (sel.year - firstYear) * th - 1;
-    ctx.strokeStyle = '#ffffff';
+    ctx.strokeStyle = cssVar('--select-ring');
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(c, c, ri + th + 2, a0, a1);
@@ -183,11 +195,11 @@ export function drawRings(ctx: CanvasRenderingContext2D, o: DrawRingsOptions): v
 
   // Core label.
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#f3ede4';
+  ctx.fillStyle = ink;
   const titleSize = o.bigTitle ? r0 * 0.66 : Math.max(11, r0 * 0.3);
   ctx.font = `500 ${titleSize}px ${DISPLAY}`;
   ctx.fillText(o.title, c, c - r0 * (o.bigTitle ? 0.1 : 0.14), r0 * 1.7);
-  ctx.fillStyle = '#8c8274';
+  ctx.fillStyle = ink3;
   ctx.font = `500 ${Math.max(8, r0 * 0.19)}px ${MONO}`;
   ctx.fillText(o.subtitle, c, c + r0 * (o.bigTitle ? 0.46 : 0.28), r0 * 1.7);
 }
