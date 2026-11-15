@@ -1,5 +1,6 @@
 // Nearby resources and escape routes, with the outside services faked.
 import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -12,6 +13,7 @@ import {
   destination,
   distanceKm,
   exposureKm,
+  hedge,
   helpQuery,
   insideRing,
   overpassQuery,
@@ -153,13 +155,53 @@ describe('civil defence and Red Cross', () => {
   });
 
   it('does not keep an answer from a query that ran out of time', async () => {
-    let n = 0;
+    let fail = true;
     const safety = createSafety({
       orsKey: '',
-      fetchJson: async () => (++n <= 2 ? { elements: [], remark: 'runtime error: Query timed out in "query" at line 1 after 26 seconds.' } : json),
+      fetchJson: async () => (fail ? { elements: [], remark: 'runtime error: Query timed out in "query" at line 1 after 26 seconds.' } : json),
     });
     await expect(safety.help(FIRE)).rejects.toThrow(/Overpass/);
+    fail = false;
     expect((await safety.help(FIRE)).length).toBe(7);
+  });
+
+  it('treats an empty help answer as a failure, asks the next server and never saves it', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'help-'));
+    try {
+      const hosts: string[] = [];
+      const safety = createSafety({
+        orsKey: '',
+        cacheDir: dir,
+        fetchJson: async (url) => {
+          hosts.push(new URL(url).host);
+          return hosts.length === 1 ? { elements: [] } : json;
+        },
+      });
+      expect((await safety.help(FIRE)).length).toBe(7);
+      expect(hosts).toHaveLength(2);
+
+      // An empty file left by an older version is ignored, not served for a week.
+      const files = await readdir(dir);
+      expect(files).toHaveLength(1);
+      await writeFile(path.join(dir, files[0]), '[]');
+      const again = createSafety({ orsKey: '', cacheDir: dir, fetchJson: async () => json });
+      expect((await again.help(FIRE)).length).toBe(7);
+
+      const allEmpty = createSafety({ orsKey: '', cacheDir: await mkdtemp(path.join(tmpdir(), 'help-')), fetchJson: async () => ({ elements: [] }) });
+      await expect(allEmpty.help(FIRE)).rejects.toThrow(/empty answer/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('hedge asks the next source when the first is slow, and the first answer wins', async () => {
+    const asked: string[] = [];
+    const got = await hedge(['slow', 'fast'], (s) => {
+      asked.push(s);
+      return new Promise((r) => setTimeout(() => r(s), s === 'slow' ? 200 : 10));
+    }, 20);
+    expect(got).toBe('fast');
+    expect(asked).toEqual(['slow', 'fast']);
   });
 });
 

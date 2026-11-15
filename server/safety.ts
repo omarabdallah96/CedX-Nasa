@@ -246,7 +246,7 @@ function helpCandidates(at: string): string {
 /** Only the places people go to for help: a light query that can reach far. */
 export function helpQuery(c: LatLon, radiusKm: number): string {
   const at = `(around:${Math.round(radiusKm * 1000)},${c.lat},${c.lon})`;
-  return `[out:json][timeout:25];
+  return `[out:json][timeout:90];
 (
 ${helpCandidates(at)}
   nwr["amenity"~"^(fire_station|hospital|clinic)$"]${at};
@@ -394,7 +394,10 @@ export function parseOrs(json: unknown): RawRoute[] {
 
 
 /** Public Overpass servers, tried in turn: any one of them is often busy. */
-const OVERPASS_URLS = (process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter,https://maps.mail.ru/osm/tools/overpass/api/interpreter')
+const OVERPASS_URLS = (
+  process.env.OVERPASS_URL ||
+  'https://overpass-api.de/api/interpreter,https://overpass.private.coffee/api/interpreter,https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+)
   .split(',')
   .map((u) => u.trim())
   .filter(Boolean);
@@ -406,8 +409,10 @@ const WEATHER_URL = 'https://api.open-meteo.com/v1/forecast';
 const RESOURCES_MS = 24 * 3_600_000;
 /** …and for a week on disk. An older copy is still used when Overpass is down. */
 const DISK_FRESH_MS = 7 * 24 * 3_600_000;
-/** Public Overpass servers can take half a minute under load. */
-const OVERPASS_TIMEOUT_MS = 60_000;
+/** Public Overpass servers can take a minute or two under load. */
+const OVERPASS_TIMEOUT_MS = 120_000;
+/** When a server has not answered by then, the next one is asked too; the first good answer wins. */
+const OVERPASS_HEDGE_MS = 10_000;
 const WIND_MS = 30 * 60_000;
 const PLAN_MS = 10 * 60_000;
 const MAX_CACHE = 400;
@@ -429,6 +434,41 @@ async function defaultFetchJson(url: string, init?: FetchInit): Promise<unknown>
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
   return res.json();
+}
+
+/**
+ * Asks the first source; each `staggerMs` without an answer (or at once on a failure)
+ * the next one is asked as well. Resolves with the first success, rejects when all fail.
+ */
+export function hedge<T>(sources: string[], ask: (source: string) => Promise<T>, staggerMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let next = 0;
+    let failed = 0;
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const start = () => {
+      clearTimeout(timer);
+      if (done || next >= sources.length) return;
+      ask(sources[next++]).then(
+        (v) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(v);
+        },
+        (err) => {
+          if (done) return;
+          if (++failed === sources.length) {
+            done = true;
+            reject(err);
+          } else start();
+        },
+      );
+      if (next < sources.length) timer = setTimeout(start, staggerMs);
+    };
+    if (!sources.length) reject(new Error('no sources'));
+    else start();
+  });
 }
 
 function cached<T>(map: Map<string, { at: number; value: Promise<T> }>, key: string, ttl: number, now: () => number, make: () => Promise<T>): Promise<T> {
@@ -466,11 +506,13 @@ export function createSafety({ fetchJson = defaultFetchJson, cacheDir, orsKey = 
     const key = `${help ? 'help' : 'v2'},${q.lat},${q.lon},${radiusKm}`;
     return cached(placeCache, key, RESOURCES_MS, now, async () => {
       const file = cacheDir ? path.join(cacheDir, `${key.replaceAll(',', '_')}.json`) : null;
-      const saved = file ? await readSaved(file) : null;
+      let saved = file ? await readSaved(file) : null;
+      // Help within 60 km is never really empty: an empty file is a bad answer kept by mistake.
+      if (help && saved && !saved.places.length) saved = null;
       if (saved && now() - saved.at < DISK_FRESH_MS) return saved.places;
       const body = `data=${encodeURIComponent(help ? helpQuery(q, radiusKm) : overpassQuery(q, radiusKm))}`;
       const errors: string[] = [];
-      for (const url of OVERPASS_URLS) {
+      const ask = async (url: string): Promise<Resource[]> => {
         try {
           const json = await fetchJson(url, {
             method: 'POST',
@@ -481,15 +523,25 @@ export function createSafety({ fetchJson = defaultFetchJson, cacheDir, orsKey = 
           // A query that ran out of time answers 200 with no elements and a remark.
           const remark = (json as { remark?: string })?.remark;
           if (remark && /error|timed out/i.test(remark)) throw new Error(`Overpass: ${remark}`);
-          const found = parseOverpass(json, q, radiusKm, help ? 60 : null);
-          if (file) await save(file, found).catch((err) => console.error('safety: could not save places', err));
-          return found;
+          const elements = (json as { elements?: unknown[] })?.elements;
+          if (!Array.isArray(elements)) throw new Error(`Overpass: no elements from ${new URL(url).host}`);
+          // A busy server can also answer with nothing at all; around a person that is never true.
+          if (help && !elements.length) throw new Error(`Overpass: empty answer from ${new URL(url).host}`);
+          return parseOverpass(json, q, radiusKm, help ? 60 : null);
         } catch (err) {
           errors.push((err as Error).message);
+          throw err;
         }
+      };
+      try {
+        const found = await hedge(OVERPASS_URLS, ask, OVERPASS_HEDGE_MS);
+        // An empty answer is not worth a week on disk.
+        if (file && found.length) await save(file, found).catch((err) => console.error('safety: could not save places', err));
+        return found;
+      } catch {
+        if (saved) return saved.places;
+        throw new SafetyUnavailableError(`OpenStreetMap (Overpass) did not answer (${errors.join('; ')}).`);
       }
-      if (saved) return saved.places;
-      throw new SafetyUnavailableError(`OpenStreetMap (Overpass) did not answer (${errors.join('; ')}).`);
     });
   }
 
