@@ -17,6 +17,17 @@ const ICONS = {
   refresh: icon('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
 };
 
+const THEME_ICONS = {
+  system: icon('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+  light: icon('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  dark: icon('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+};
+
+/** System / Light / Dark. Used in the sidebar and on the sign-in card; app.js keeps them in sync. */
+const THEME_SWITCH = `<div class="theme" role="group" aria-label="Theme">${(['system', 'light', 'dark'] as const)
+  .map((t) => `<button type="button" data-theme-choice="${t}" aria-pressed="false" title="${t[0].toUpperCase() + t.slice(1)} theme">${THEME_ICONS[t]}<span>${t[0].toUpperCase() + t.slice(1)}</span></button>`)
+  .join('')}</div>`;
+
 const nav = (page: keyof typeof ICONS, label: string) =>
   `<a href="#${page}" class="nav" data-page="${page}">${ICONS[page]}<span>${label}</span><span class="count" id="n-${page}"></span></a>`;
 
@@ -43,6 +54,7 @@ export const ADMIN_HTML = `<!doctype html>
     <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
     <button type="submit" class="primary" id="login-btn">Sign in</button>
     <p id="login-error" class="error" role="alert"></p>
+    ${THEME_SWITCH}
   </form>
   <div id="not-configured" class="card login" hidden>
     <h1>Admin is off</h1>
@@ -60,6 +72,7 @@ export const ADMIN_HTML = `<!doctype html>
       ${nav('zones', 'Zones')}
     </nav>
     <div class="side-foot">
+      ${THEME_SWITCH}
       <button id="logout" class="nav navbtn">${ICONS.out}<span>Sign out</span></button>
     </div>
   </aside>
@@ -179,19 +192,26 @@ export const ADMIN_HTML = `<!doctype html>
 </html>`;
 
 export const ADMIN_CSS = `
+/* Light by default; dark follows the system unless the theme switch says otherwise. */
 :root {
   --bg: #f6f3ee; --surface: #ffffff; --ink: #1d1a16; --muted: #6b645a; --line: #e4ddd2;
   --accent: #c2410c; --accent-ink: #ffffff; --danger: #b91c1c; --ok: #15803d; --hidden-bg: #fbf4e9;
-  --side: #1d1a16; --side-ink: #e9e2d8; --side-muted: #a39a8d; --side-hover: #2b2621; --side-on: #3a322a;
+  --side: #fcfaf7; --side-ink: #1d1a16; --side-muted: #6b645a; --side-hover: #f1ece4; --side-on: #ebe3d6;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #14110e; --surface: #1e1a16; --ink: #f1ebe2; --muted: #a39a8d; --line: #332c25;
     --accent: #f97316; --accent-ink: #1a0d03; --danger: #f87171; --ok: #4ade80; --hidden-bg: #2a2118;
     --side: #0f0d0b; --side-ink: #f1ebe2; --side-muted: #8f877b; --side-hover: #1e1a16; --side-on: #2a241e;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #14110e; --surface: #1e1a16; --ink: #f1ebe2; --muted: #a39a8d; --line: #332c25;
+  --accent: #f97316; --accent-ink: #1a0d03; --danger: #f87171; --ok: #4ade80; --hidden-bg: #2a2118;
+  --side: #0f0d0b; --side-ink: #f1ebe2; --side-muted: #8f877b; --side-hover: #1e1a16; --side-on: #2a241e;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
@@ -213,7 +233,7 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; }
 
 /* Shell: sidebar + content */
 .shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
-.side { background: var(--side); color: var(--side-ink); display: flex; flex-direction: column; gap: 6px;
+.side { background: var(--side); color: var(--side-ink); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px;
   padding: 18px 12px; position: sticky; top: 0; height: 100vh; }
 .side-brand { padding: 4px 10px 18px; font-size: 16px; }
 .side-brand .muted { color: var(--side-muted); }
@@ -227,7 +247,15 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; }
 .count { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--side-muted);
   background: var(--side-hover); border-radius: 999px; padding: 1px 8px; }
 .count:empty { display: none; }
-.side-foot { margin-top: auto; border-top: 1px solid var(--side-on); padding-top: 10px; }
+.side-foot { margin-top: auto; border-top: 1px solid var(--side-on); padding-top: 10px; display: grid; gap: 8px; }
+.theme { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 3px; border-radius: 10px; background: var(--side-hover); }
+.theme button { min-height: 32px; padding: 4px 6px; border: 0; border-radius: 7px; background: none; color: var(--side-muted);
+  font-size: 13px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.theme button .ico { width: 15px; height: 15px; }
+.theme button:hover { color: var(--side-ink); }
+.theme button[aria-pressed="true"] { background: var(--side); color: var(--side-ink); box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+.login .theme { background: var(--bg); justify-self: start; margin-top: 4px; }
+.login .theme button[aria-pressed="true"] { background: var(--surface); color: var(--ink); }
 .navbtn { width: 100%; border: 0; background: none; font: inherit; cursor: pointer; text-align: left; }
 .scrim { position: fixed; inset: 0; background: rgb(0 0 0 / .45); z-index: 9; }
 
@@ -386,6 +414,22 @@ const PAGES = {
   zones: { title: 'Zones', sub: 'Every alert zone people are watching, and who it belongs to.' },
 };
 const state = { status: 'all', label: '', device: '', before: null, photoUrls: [], page: 'reports', users: [], zones: [] };
+
+// ---- Theme: 'system' follows the device; 'light' or 'dark' is remembered in this browser. ----
+function savedTheme() {
+  try { const t = localStorage.getItem('firesight-admin-theme'); return t === 'light' || t === 'dark' ? t : 'system'; }
+  catch { return 'system'; }
+}
+function applyTheme(t) {
+  if (t === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  for (const b of document.querySelectorAll('[data-theme-choice]')) b.setAttribute('aria-pressed', String(b.dataset.themeChoice === t));
+}
+function setTheme(t) {
+  try { if (t === 'system') localStorage.removeItem('firesight-admin-theme'); else localStorage.setItem('firesight-admin-theme', t); } catch {}
+  applyTheme(t);
+}
+applyTheme(savedTheme());
 
 async function call(method, url, body) {
   const res = await fetch(url, {
@@ -886,6 +930,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await call('POST', '/admin/logout'); } catch {}
     show('login');
   });
+  for (const b of document.querySelectorAll('[data-theme-choice]')) b.addEventListener('click', () => setTheme(b.dataset.themeChoice));
+  applyTheme(savedTheme());
   window.addEventListener('hashchange', route);
   $('menu').addEventListener('click', () => openSide(!$('side').classList.contains('open')));
   $('scrim').addEventListener('click', () => openSide(false));
