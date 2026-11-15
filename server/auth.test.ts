@@ -31,7 +31,7 @@ describe('accounts', () => {
     const { call } = setup();
     const reg = await call('POST', '/auth/register', { email: ' Rana@Example.com ', password: 'long enough pw', name: 'Rana' });
     expect(reg.status).toBe(201);
-    expect(reg.json.user).toMatchObject({ email: 'rana@example.com', name: 'Rana' });
+    expect(reg.json.user).toMatchObject({ email: 'rana@example.com', name: 'Rana', plan: 'free' });
     expect(reg.json.user.passwordHash).toBeUndefined();
     expect(reg.res.headers.get('cache-control')).toBe('no-store');
     const token = reg.json.token as string;
@@ -81,6 +81,14 @@ describe('accounts', () => {
     expect((await call('DELETE', '/auth/me', { password: 'password-1' }, json.token)).json).toEqual({ deleted: true });
     expect(accounts.count()).toBe(0);
     expect((await call('GET', '/auth/me', undefined, json.token)).status).toBe(401);
+  });
+
+  it('reports the plan set for an account', async () => {
+    const { call, accounts } = setup();
+    const { json } = await call('POST', '/auth/register', { email: 'a@b.co', password: 'password-1' });
+    expect(accounts.setPlan('A@B.CO'.toLowerCase(), 'pro')?.plan).toBe('pro');
+    expect((await call('GET', '/auth/me', undefined, json.token)).json.user.plan).toBe('pro');
+    expect(accounts.setPlan('nobody@b.co', 'pro')).toBeNull();
   });
 
   it('expires unused sessions', async () => {

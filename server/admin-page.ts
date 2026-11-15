@@ -1,4 +1,5 @@
-// The /admin page: sign-in, then the report moderation list. Plain HTML, CSS
+// The /admin page: sign-in, then tabs for report moderation, zone alerts
+// sent to phones, and user plans. Plain HTML, CSS
 // and JS served by the API (no build step). User text is only ever set with
 // textContent, never as HTML.
 
@@ -16,6 +17,11 @@ export const ADMIN_HTML = `<!doctype html>
 <body>
 <header class="top">
   <div class="brand"><span class="dot"></span>Firesight <span class="muted">admin</span></div>
+  <nav id="tabs" class="tabs" hidden>
+    <button data-tab="reports" class="tab on">Reports</button>
+    <button data-tab="alerts" class="tab">Zone alerts</button>
+    <button data-tab="users" class="tab">Users</button>
+  </nav>
   <button id="logout" class="ghost" hidden>Sign out</button>
 </header>
 
@@ -38,6 +44,7 @@ export const ADMIN_HTML = `<!doctype html>
   </section>
 
   <section id="dash" hidden>
+   <div id="tab-reports">
     <div class="stats" id="stats"></div>
 
     <div class="filters card">
@@ -58,6 +65,49 @@ export const ADMIN_HTML = `<!doctype html>
     <p id="list-empty" class="muted center-text" hidden>No reports match.</p>
     <ul id="list" class="list"></ul>
     <div class="center-text"><button id="more" class="ghost" hidden>Load more</button></div>
+   </div>
+
+   <div id="tab-alerts" hidden>
+    <form id="alert-form" class="card form">
+      <h2>Send a zone alert</h2>
+      <p class="muted">Phones whose alert zone overlaps this circle, or that are inside it, get a notification at their next check (within minutes when the app is open, up to 3 hours in the background).</p>
+      <div class="grid2">
+        <label>Title (English)<input id="a-title" maxlength="80" required placeholder="Wildfire near Qornet es Saouda"></label>
+        <label>Title (Arabic, optional)<input id="a-title-ar" maxlength="80" dir="rtl"></label>
+        <label>Message (English)<textarea id="a-message" maxlength="500" rows="3" required placeholder="Civil Defence is on site. Avoid the area and keep windows closed."></textarea></label>
+        <label>Message (Arabic, optional)<textarea id="a-message-ar" maxlength="500" rows="3" dir="rtl"></textarea></label>
+      </div>
+      <div class="grid4">
+        <label>Latitude<input id="a-lat" inputmode="decimal" required placeholder="33.90"></label>
+        <label>Longitude<input id="a-lon" inputmode="decimal" required placeholder="35.80"></label>
+        <label>Radius (km)<input id="a-radius" type="number" min="0.5" max="200" step="0.5" value="10" required></label>
+        <label>Active for (hours)<input id="a-hours" type="number" min="1" max="336" value="24" required></label>
+      </div>
+      <div class="row">
+        <label>Level
+          <select id="a-level">
+            <option value="danger">Danger (urgent)</option>
+            <option value="warning" selected>Warning</option>
+            <option value="info">Info</option>
+          </select>
+        </label>
+        <a id="a-map" target="_blank" rel="noopener noreferrer" class="muted">Check the place on a map</a>
+        <button type="submit" class="primary" id="a-send">Send alert</button>
+      </div>
+      <p id="a-error" class="error" role="alert"></p>
+    </form>
+    <h2 class="h2">Recent alerts</h2>
+    <p id="alerts-empty" class="muted" hidden>No alerts sent yet.</p>
+    <ul id="alerts" class="list"></ul>
+   </div>
+
+   <div id="tab-users" hidden>
+    <div class="filters card">
+      <label>Find by email<input id="u-q" type="search" placeholder="name@example.com"></label>
+      <span id="u-total" class="muted"></span>
+    </div>
+    <ul id="users" class="list"></ul>
+   </div>
   </section>
 </main>
 
@@ -138,6 +188,26 @@ dialog { border: 0; border-radius: 12px; padding: 12px; background: var(--surfac
 dialog::backdrop { background: rgb(0 0 0 / .7); }
 dialog img { display: block; max-width: 100%; max-height: 80vh; border-radius: 8px; }
 dialog form { text-align: right; margin-top: 8px; }
+.tabs { display: flex; gap: 4px; margin: 0 auto 0 24px; }
+.tab { border: 0; background: none; color: var(--muted); font-weight: 600; }
+.tab.on { color: var(--ink); background: var(--bg); }
+.form { padding: 18px; display: grid; gap: 12px; margin-bottom: 18px; }
+.form h2, .h2 { margin: 0; font-size: 18px; }
+.h2 { margin: 6px 0 10px; }
+.form p { margin: 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; resize: vertical; }
+.form .row #a-send { margin-left: auto; }
+.alert-item, .user-item { padding: 12px 14px; display: grid; gap: 6px; }
+.alert-item.over { opacity: .6; }
+.badge.danger { color: var(--danger); }
+.badge.warning { color: var(--accent); }
+.badge.pro { color: var(--ok); }
+@media (max-width: 720px) {
+  .grid2, .grid4 { grid-template-columns: 1fr 1fr; }
+  .tabs { margin-left: 8px; }
+}
 @media (max-width: 560px) {
   .item { grid-template-columns: 76px 1fr; gap: 10px; }
   .thumb { width: 76px; height: 76px; }
@@ -169,6 +239,7 @@ function show(which) {
   $('login').hidden = which !== 'login';
   $('dash').hidden = which !== 'dash';
   $('logout').hidden = which !== 'dash';
+  $('tabs').hidden = which !== 'dash';
   if (which === 'login') setTimeout(() => $('password').focus(), 0);
 }
 
@@ -234,6 +305,7 @@ function renderItem(r) {
       el('div', { class: 'actions' }, [
         el('button', { text: r.hidden ? 'Show to phones' : 'Hide', onclick: (e) => setHidden(r, !r.hidden, e.target) }),
         el('button', { class: 'danger', text: 'Delete', onclick: (e) => remove(r, e.target) }),
+        el('button', { text: 'Send zone alert here', onclick: () => alertAt(r) }),
       ]),
     ]),
   ]);
@@ -330,6 +402,121 @@ async function remove(r, btn) {
   } catch (e) { btn.disabled = false; toast(e.message); }
 }
 
+// ---- Tabs ----
+function openTab(name) {
+  for (const b of document.querySelectorAll('.tab')) b.classList.toggle('on', b.dataset.tab === name);
+  for (const t of ['reports', 'alerts', 'users']) $('tab-' + t).hidden = t !== name;
+  if (name === 'alerts') loadAlerts();
+  if (name === 'users') loadUsers();
+}
+
+// ---- Zone alerts ----
+const LEVEL_NAMES = { danger: 'Danger', warning: 'Warning', info: 'Info' };
+
+function alertAt(r) {
+  $('a-lat').value = r.lat.toFixed(4);
+  $('a-lon').value = r.lon.toFixed(4);
+  if (!$('a-title').value) $('a-title').value = (LABEL_NAMES[r.label] || 'Fire') + ' reported nearby';
+  updateMapLink();
+  openTab('alerts');
+  $('a-message').focus();
+}
+
+function updateMapLink() {
+  const lat = Number($('a-lat').value), lon = Number($('a-lon').value);
+  const ok = $('a-lat').value !== '' && $('a-lon').value !== '' && Number.isFinite(lat) && Number.isFinite(lon);
+  $('a-map').hidden = !ok;
+  if (ok) $('a-map').href = 'https://www.openstreetmap.org/?mlat=' + lat + '&mlon=' + lon + '#map=11/' + lat + '/' + lon;
+}
+
+function renderAlert(b, now) {
+  const over = b.cancelled || b.expiresAt <= now;
+  const status = b.cancelled ? 'Cancelled' : over ? 'Ended' : 'Active until ' + when(b.expiresAt);
+  return el('li', { class: 'card alert-item' + (over ? ' over' : '') }, [
+    el('div', { class: 'row' }, [
+      el('span', { class: 'badge ' + b.level, text: LEVEL_NAMES[b.level] || b.level }),
+      el('b', { text: b.title }),
+      el('span', { class: 'muted', text: status }),
+    ]),
+    el('p', { class: 'note', text: b.message }),
+    b.titleAr || b.messageAr ? el('p', { class: 'note', dir: 'rtl', text: [b.titleAr, b.messageAr].filter(Boolean).join(' · ') }) : null,
+    el('div', { class: 'row' }, [
+      el('a', { href: 'https://www.openstreetmap.org/?mlat=' + b.lat + '&mlon=' + b.lon + '#map=11/' + b.lat + '/' + b.lon,
+        target: '_blank', rel: 'noopener noreferrer', text: b.lat.toFixed(4) + ', ' + b.lon.toFixed(4) + ' · ' + b.radiusKm + ' km' }),
+      el('span', { class: 'muted', text: 'sent ' + when(b.createdAt) }),
+      over ? null : el('button', { class: 'danger', text: 'Cancel', onclick: (e) => cancelAlert(b, e.target) }),
+    ]),
+  ]);
+}
+
+async function loadAlerts() {
+  try {
+    const { broadcasts, now } = await call('GET', '/admin/api/broadcasts');
+    $('alerts').replaceChildren(...broadcasts.map((b) => renderAlert(b, now)));
+    $('alerts-empty').hidden = broadcasts.length > 0;
+  } catch (e) { if (e.message !== 'Signed out') toast(e.message); }
+}
+
+async function sendAlert(e) {
+  e.preventDefault();
+  $('a-error').textContent = '';
+  const body = {
+    title: $('a-title').value, titleAr: $('a-title-ar').value,
+    message: $('a-message').value, messageAr: $('a-message-ar').value,
+    level: $('a-level').value,
+    lat: Number($('a-lat').value), lon: Number($('a-lon').value),
+    radiusKm: Number($('a-radius').value), hours: Number($('a-hours').value),
+  };
+  if (!confirm('Send "' + body.title + '" to phones within ' + body.radiusKm + ' km of ' + body.lat + ', ' + body.lon + '?')) return;
+  $('a-send').disabled = true;
+  try {
+    await call('POST', '/admin/api/broadcasts', body);
+    for (const id of ['a-title', 'a-title-ar', 'a-message', 'a-message-ar']) $(id).value = '';
+    toast('Alert sent.');
+    loadAlerts();
+  } catch (err) { $('a-error').textContent = err.message; }
+  finally { $('a-send').disabled = false; }
+}
+
+async function cancelAlert(b, btn) {
+  if (!confirm('Cancel "' + b.title + '"? Phones stop showing it at their next check.')) return;
+  btn.disabled = true;
+  try { await call('POST', '/admin/api/broadcasts/' + encodeURIComponent(b.id) + '/cancel'); toast('Cancelled.'); loadAlerts(); }
+  catch (e) { btn.disabled = false; toast(e.message); }
+}
+
+// ---- Users ----
+function renderUser(u) {
+  const pro = u.plan === 'pro';
+  return el('li', { class: 'card user-item' }, [
+    el('div', { class: 'row' }, [
+      el('b', { text: u.email }),
+      u.name ? el('span', { class: 'muted', text: u.name }) : null,
+      el('span', { class: 'badge ' + (pro ? 'pro' : ''), text: pro ? 'Pro' : 'Free' }),
+      el('span', { class: 'muted', text: 'joined ' + when(u.createdAt) }),
+      el('button', { text: pro ? 'Set to Free' : 'Give Pro', onclick: (e) => setPlan(u, pro ? 'free' : 'pro', e.target) }),
+    ]),
+  ]);
+}
+
+let userTimer;
+async function loadUsers() {
+  try {
+    const { users, total } = await call('GET', '/admin/api/users?q=' + encodeURIComponent($('u-q').value));
+    $('users').replaceChildren(...users.map(renderUser));
+    $('u-total').textContent = total + ' account(s)' + (total > users.length ? ', showing ' + users.length : '');
+  } catch (e) { if (e.message !== 'Signed out') toast(e.message); }
+}
+
+async function setPlan(u, plan, btn) {
+  btn.disabled = true;
+  try {
+    const { user } = await call('POST', '/admin/api/users/plan', { email: u.email, plan });
+    toast(user.email + ' is now ' + (user.plan === 'pro' ? 'Pro' : 'Free') + '.');
+    loadUsers();
+  } catch (e) { btn.disabled = false; toast(e.message); }
+}
+
 async function start() {
   let session;
   try { session = await call('GET', '/admin/api/session'); } catch (e) { toast(e.message); return; }
@@ -367,6 +554,12 @@ document.addEventListener('DOMContentLoaded', () => {
   $('f-label').addEventListener('change', (e) => { state.label = e.target.value; refresh(); });
   $('refresh').addEventListener('click', refresh);
   $('more').addEventListener('click', () => loadList(false).catch((e) => toast(e.message)));
+  for (const b of document.querySelectorAll('.tab')) b.addEventListener('click', () => openTab(b.dataset.tab));
+  $('alert-form').addEventListener('submit', sendAlert);
+  $('a-lat').addEventListener('input', updateMapLink);
+  $('a-lon').addEventListener('input', updateMapLink);
+  $('u-q').addEventListener('input', () => { clearTimeout(userTimer); userTimer = setTimeout(loadUsers, 250); });
+  updateMapLink();
   start();
 });
 `;

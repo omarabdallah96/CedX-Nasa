@@ -15,6 +15,7 @@ import { DANGER_CLASSES, dangerLevel } from './fwi.ts';
 import { FORECAST_DAYS, ForecastUnavailableError, nearestCell, type CountryForecast, type Forecast } from './forecast.ts';
 import { createRateLimit } from './ratelimit.ts';
 import { createAdmin } from './admin.ts';
+import type { BroadcastStore } from './broadcasts.ts';
 import { AccountError, MAX_NAME, MAX_PASSWORD, MIN_PASSWORD, normalizeEmail, type AccountStore, type User } from './accounts.ts';
 import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
 import { lastWeek, rangeSummary, selectionVerdict, type RangeSummary } from '../src/lib/analysis.ts';
@@ -95,6 +96,8 @@ export interface AppOptions {
   accounts?: AccountStore;
   /** Sign-in and sign-up attempts per client per 15 minutes. */
   authPer15Min?: number;
+  /** Zone alerts sent from the admin page; /broadcasts answers 503 without it. */
+  broadcasts?: BroadcastStore;
 }
 
 /** Arabic names, from pipeline/config.mjs. */
@@ -121,7 +124,7 @@ function clientKey(c: Context): string {
   }
 }
 
-export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20 }: AppOptions) {
+export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
@@ -257,6 +260,7 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
         'PATCH /api/v1/auth/me        {name}',
         'POST /api/v1/auth/logout',
         'DELETE /api/v1/auth/me       {password}',
+        'GET /api/v1/broadcasts       (active zone alerts)',
       ],
     });
   });
@@ -825,6 +829,13 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     return c.json({ deleted: true });
   });
 
+  // ---- Zone alerts from the admin page. Phones match them to their zones. ----
+  api.get('/broadcasts', (c) => {
+    if (!broadcasts) throw new ApiError(503, 'broadcasts_unavailable', 'Zone alerts are not enabled on this server.');
+    c.header('Cache-Control', 'public, max-age=60');
+    return c.json({ broadcasts: broadcasts.active() });
+  });
+
   // ---- Accounts (optional: the app works as a guest) ----
   const authLimiter = createRateLimit({ limit: authPer15Min, windowMs: 15 * 60_000 });
   const needAccounts = () => {
@@ -950,7 +961,7 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
   app.get('/api/v1/', (c) => c.redirect('/api/v1'));
   app.route('/api/v1', api);
   app.all('/api/*', (c) => c.json({ error: { code: 'not_found', message: 'The API lives under /api/v1.' } }, 404));
-  app.route('/', createAdmin({ password: adminPassword, reports, clientKey }));
+  app.route('/', createAdmin({ password: adminPassword, reports, accounts, broadcasts, clientKey }));
   if (siteDir) app.use('*', serveStatic({ root: path.relative(process.cwd(), siteDir) || '.' }));
   return app;
 }
