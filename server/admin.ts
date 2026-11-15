@@ -7,6 +7,8 @@
 // cross-site form cannot send. Lives outside /api/v1, so the API's open CORS
 // does not apply here.
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from './admin-page.ts';
@@ -35,6 +37,29 @@ export interface AdminOptions {
   clientKey: (c: Context) => string;
   now?: () => number;
 }
+
+// The alert form's map: MapLibre straight from node_modules (no build step),
+// read once on first use. Basemap tiles come from OpenStreetMap, which wants a
+// Referer: the admin pages send their origin (never the path) to other sites.
+const VENDOR: Record<string, { file: string; type: string }> = {
+  'maplibre-gl.mjs': { file: 'maplibre-gl/dist/maplibre-gl.mjs', type: 'text/javascript; charset=utf-8' },
+  'maplibre-gl-worker.mjs': { file: 'maplibre-gl/dist/maplibre-gl-worker.mjs', type: 'text/javascript; charset=utf-8' },
+  'maplibre-gl.css': { file: 'maplibre-gl/dist/maplibre-gl.css', type: 'text/css; charset=utf-8' },
+};
+const vendorCache = new Map<string, Buffer | null>();
+function vendorFile(name: string): Buffer | null {
+  if (!vendorCache.has(name)) {
+    let bytes: Buffer | null = null;
+    try {
+      bytes = readFileSync(createRequire(import.meta.url).resolve(VENDOR[name].file));
+    } catch {
+      bytes = null;
+    }
+    vendorCache.set(name, bytes);
+  }
+  return vendorCache.get(name)!;
+}
+const TILES = 'https://tile.openstreetmap.org';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest();
 
@@ -74,15 +99,22 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, devi
     if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
     c.header('X-Frame-Options', 'DENY');
     c.header('X-Content-Type-Options', 'nosniff');
-    c.header('Referrer-Policy', 'no-referrer');
+    c.header('Referrer-Policy', 'strict-origin');
     c.header('Content-Security-Policy',
-      "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+      `default-src 'self'; img-src 'self' blob: data: ${TILES}; style-src 'self'; script-src 'self'; connect-src 'self' ${TILES}; ` +
+      "worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   });
 
   app.get('/admin', (c) => c.html(ADMIN_HTML));
   app.get('/admin/', (c) => c.redirect('/admin'));
   app.get('/admin/app.js', (c) => c.body(ADMIN_JS, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }));
   app.get('/admin/app.css', (c) => c.body(ADMIN_CSS, 200, { 'Content-Type': 'text/css; charset=utf-8' }));
+  app.get('/admin/vendor/:name', (c) => {
+    const name = c.req.param('name');
+    const bytes = Object.hasOwn(VENDOR, name) ? vendorFile(name) : null;
+    if (!bytes) return fail(c, 404, 'not_found', 'No such file.');
+    return c.body(new Uint8Array(bytes), 200, { 'Content-Type': VENDOR[name].type, 'Cache-Control': 'public, max-age=86400' });
+  });
 
   app.get('/admin/api/session', (c) => c.json({
     configured,

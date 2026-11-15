@@ -39,6 +39,7 @@ export const ADMIN_HTML = `<!doctype html>
 <meta name="robots" content="noindex, nofollow">
 <title>Firesight admin</title>
 <link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/admin/vendor/maplibre-gl.css">
 <link rel="stylesheet" href="/admin/app.css">
 <script src="/admin/app.js" defer></script>
 </head>
@@ -112,9 +113,27 @@ export const ADMIN_HTML = `<!doctype html>
       <div id="page-alerts" class="page" hidden>
         <form id="alert-form" class="card form">
           <h2>Send a zone alert</h2>
-          <p class="muted">Pushed right away to every phone whose alert zone overlaps this circle, or whose last location is inside it. Phones without push pick it up at their next check. Tip: use “Alert this zone” on the Zones or Users page to fill in the place.</p>
-          <p id="a-target" class="chip" hidden></p>
+          <p class="muted">Pushed right away to every phone whose alert zone overlaps this circle, or whose last location is inside it. Phones without push pick it up at their next check.</p>
           <p id="a-phones" class="phones"></p>
+          <div class="where">
+            <div class="where-head">
+              <h3>Where</h3>
+              <label class="grow">Use someone's zone
+                <select id="a-zone"><option value="">Pick a zone…</option></select>
+              </label>
+            </div>
+            <div class="map-wrap">
+              <div id="a-mapbox" class="mapbox" role="application" aria-label="Alert area map"></div>
+              <p id="a-map-hint" class="map-hint">Click the map to place the alert, or click a zone to target it. Drag the pin to move it.</p>
+            </div>
+            <div class="row">
+              <p id="a-target" class="chip" hidden></p>
+              <p id="a-reach" class="muted reach"></p>
+            </div>
+            <label class="radius">Radius <output id="a-radius-out">10 km</output>
+              <input id="a-radius-range" type="range" min="0.5" max="100" step="0.5" value="10" aria-label="Radius in km">
+            </label>
+          </div>
           <div class="grid2">
             <label>Title (English)<input id="a-title" maxlength="80" required placeholder="Wildfire near Qornet es Saouda"></label>
             <label>Title (Arabic, optional)<input id="a-title-ar" maxlength="80" dir="rtl"></label>
@@ -325,7 +344,32 @@ a { color: var(--accent); }
 .form p { margin: 0; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.grid2 > label, .grid4 > label { min-width: 0; }
+.grid2 input, .grid4 input { width: 100%; min-width: 0; }
 .form .row #a-send { margin-left: auto; }
+/* Alert map */
+.where { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; min-width: 0; }
+.form > * { min-width: 0; }
+.where-head { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.where-head h3 { margin: 0 auto 8px 0; font-size: 15px; }
+.where-head .grow { flex: 0 1 340px; min-width: 0; }
+.where-head select { width: 100%; max-width: 100%; text-overflow: ellipsis; }
+.map-wrap { position: relative; }
+.mapbox { height: 420px; border-radius: 10px; border: 1px solid var(--line); overflow: hidden; background: var(--bg); }
+.map-hint { position: absolute; left: 10px; top: 10px; right: 54px; width: fit-content; margin: 0 !important; pointer-events: none;
+  background: color-mix(in srgb, var(--surface) 90%, transparent); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 10px; font-size: 13px; color: var(--ink); }
+.map-hint.error { color: var(--danger); }
+.pin { width: 22px; height: 22px; border-radius: 50%; background: var(--pin, var(--accent)); border: 3px solid #fff;
+  box-shadow: 0 1px 6px rgb(0 0 0 / .45); cursor: grab; }
+.pin:active { cursor: grabbing; }
+.reach { font-size: 13.5px; }
+.reach b { color: var(--ink); }
+.radius { grid-template-columns: auto 1fr; align-items: center; gap: 4px 12px; }
+.radius output { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; min-width: 64px; }
+.radius input { grid-column: 1 / -1; min-height: 0; padding: 0; accent-color: var(--accent); background: none; border: 0; }
+.maplibregl-popup-content { background: var(--surface); color: var(--ink); font: 13px/1.4 system-ui, sans-serif; padding: 8px 10px; border-radius: 8px; }
+.maplibregl-popup-tip { border-top-color: var(--surface) !important; border-bottom-color: var(--surface) !important; }
 .alert-item { padding: 12px 14px; display: grid; gap: 6px; }
 .alert-item.over { opacity: .6; }
 .phones { font-size: 13.5px; }
@@ -383,6 +427,9 @@ dialog form { text-align: right; margin-top: 8px; }
   .bar { padding: 10px 16px; }
   main { padding: 16px 16px 60px; }
   .grid4 { grid-template-columns: 1fr 1fr; }
+  .mapbox { height: 340px; }
+  .where-head .grow { flex: 1 1 100%; }
+  .map-wrap.placed .map-hint { display: none; }
 }
 @media (max-width: 720px) {
   .grid2 { grid-template-columns: 1fr; }
@@ -414,6 +461,8 @@ const PAGES = {
   zones: { title: 'Zones', sub: 'Every alert zone people are watching, and who it belongs to.' },
 };
 const state = { status: 'all', label: '', device: '', before: null, photoUrls: [], page: 'reports', users: [], zones: [] };
+/** The alert form's map, loaded on first use. */
+const amap = { map: null, loading: null, ready: false, pin: null, popup: null, fitPending: false, fittedZones: false };
 
 // ---- Theme: 'system' follows the device; 'light' or 'dark' is remembered in this browser. ----
 function savedTheme() {
@@ -424,6 +473,7 @@ function applyTheme(t) {
   if (t === 'system') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', t);
   for (const b of document.querySelectorAll('[data-theme-choice]')) b.setAttribute('aria-pressed', String(b.dataset.themeChoice === t));
+  if (typeof setBasemap === 'function') setBasemap();
 }
 function setTheme(t) {
   try { if (t === 'system') localStorage.removeItem('firesight-admin-theme'); else localStorage.setItem('firesight-admin-theme', t); } catch {}
@@ -512,7 +562,7 @@ function go(page) {
 
 function load(page) {
   if (page === 'reports') refreshReports();
-  if (page === 'alerts') loadAlerts();
+  if (page === 'alerts') { loadAlerts(); loadAlertZones(); ensureMap(); }
   if (page === 'users') loadUsers();
   if (page === 'zones') loadZones();
 }
@@ -666,22 +716,28 @@ async function remove(r, btn) {
 // ---- Zone alerts ----
 const LEVEL_NAMES = { danger: 'Danger', warning: 'Warning', info: 'Info' };
 
-/** Opens the alert form with the place filled in: from a report, or from someone's zone. */
-function alertAt(p) {
+/** Fills in the place: from a report, from someone's zone, or from the map. */
+function setPlace(p, fit) {
   $('a-lat').value = p.lat.toFixed(4);
   $('a-lon').value = p.lon.toFixed(4);
-  if (p.radiusKm) $('a-radius').value = String(Math.min(200, Math.max(0.5, p.radiusKm)));
+  if (p.radiusKm) { $('a-radius').value = String(Math.min(200, Math.max(0.5, p.radiusKm))); syncRadius($('a-radius')); }
   if (p.title && !$('a-title').value) $('a-title').value = p.title;
   const target = $('a-target');
   if (p.zone) {
     target.replaceChildren(
       el('span', { class: 'ring' }),
       el('span', { text: 'Targeting zone “' + p.zone + '”' + (p.owner ? ' of ' + p.owner : '') + ' · ' + p.radiusKm + ' km' }),
-      el('button', { type: 'button', 'aria-label': 'Clear', text: '✕', onclick: () => { target.hidden = true; } }),
+      el('button', { type: 'button', 'aria-label': 'Clear', text: '✕', onclick: () => { target.hidden = true; $('a-zone').value = ''; } }),
     );
     target.hidden = false;
-  } else target.hidden = true;
+  } else { target.hidden = true; $('a-zone').value = ''; }
   updateMapLink();
+  syncMap(fit !== false);
+}
+
+/** Opens the alert form with the place filled in, from another page. */
+function alertAt(p) {
+  setPlace(p, true);
   go('alerts');
   setTimeout(() => ($('a-title').value ? $('a-message') : $('a-title')).focus(), 0);
 }
@@ -748,6 +804,242 @@ async function sendAlert(e) {
     loadAlerts();
   } catch (err) { $('a-error').textContent = err.message; }
   finally { $('a-send').disabled = false; }
+}
+
+// ---- Alert map: click to place, drag the pin, or pick someone's zone ----
+const LEVEL_COLORS = { danger: '#dc2626', warning: '#ea580c', info: '#2563eb' };
+const ZONE_COLOR = '#6d28d9';
+const DEFAULT_VIEW = { center: [35.8, 33.9], zoom: 7 };
+
+function isDark() {
+  const t = document.documentElement.getAttribute('data-theme');
+  return t ? t === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function distanceKm(lat1, lon1, lat2, lon2) {
+  const r = Math.PI / 180;
+  const a = Math.sin((lat2 - lat1) * r / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin((lon2 - lon1) * r / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** A circle on the globe as a GeoJSON polygon ring. */
+function circleRing(lat, lon, km) {
+  const r = Math.PI / 180, d = km / 6371, la = lat * r, lo = lon * r, ring = [];
+  for (let i = 0; i <= 72; i++) {
+    const b = 2 * Math.PI * i / 72;
+    const la2 = Math.asin(Math.sin(la) * Math.cos(d) + Math.cos(la) * Math.sin(d) * Math.cos(b));
+    const lo2 = lo + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(la), Math.cos(d) - Math.sin(la) * Math.sin(la2));
+    ring.push([lo2 / r, la2 / r]);
+  }
+  return ring;
+}
+
+function ringBounds(rings) {
+  let w = 180, s = 90, e = -180, n = -90;
+  for (const ring of rings) for (const [x, y] of ring) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+  return [[w, s], [e, n]];
+}
+
+/** The circle typed in the form, or null while it is incomplete. */
+function formCircle() {
+  const lat = Number($('a-lat').value), lon = Number($('a-lon').value), radiusKm = Number($('a-radius').value);
+  if ($('a-lat').value === '' || $('a-lon').value === '' || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  return { lat, lon, radiusKm: Number.isFinite(radiusKm) && radiusKm > 0 ? radiusKm : 0.5 };
+}
+
+const ownerName = (z) => z.owner.email || (z.owner.kind === 'guest' ? 'a guest phone' : 'a deleted account');
+const hits = (c, z) => !!c && distanceKm(c.lat, c.lon, z.lat, z.lon) <= c.radiusKm + z.radiusKm;
+const bySize = (a, b) => (state.zones[a.properties.i] || {}).radiusKm - (state.zones[b.properties.i] || {}).radiusKm;
+
+/** "Overlaps 3 zones of 2 people": what the circle reaches, before sending. */
+function updateReach(c) {
+  const out = $('a-reach');
+  if (!c) { out.textContent = 'Place the alert on the map or enter its coordinates.'; return; }
+  const hit = state.zones.filter((z) => hits(c, z));
+  const people = new Set(hit.map((z) => z.owner.kind === 'user' ? 'u:' + z.owner.email : 'g:' + z.owner.device));
+  out.replaceChildren(
+    document.createTextNode('Overlaps '),
+    el('b', { text: hit.length + ' zone' + (hit.length === 1 ? '' : 's') }),
+    document.createTextNode(' of '),
+    el('b', { text: people.size + (people.size === 1 ? ' person' : ' people') }),
+    document.createTextNode(', plus phones whose last location is inside.'),
+  );
+}
+
+function syncRadius(from) {
+  const v = Number(from.value);
+  if (from.id === 'a-radius-range') $('a-radius').value = String(v);
+  else if (Number.isFinite(v)) $('a-radius-range').value = String(Math.min(100, Math.max(0.5, v)));
+  $('a-radius-out').textContent = (Number.isFinite(v) ? v : 0) + ' km';
+}
+
+/** Redraws the circle, pin and zone highlights from the form. */
+function syncMap(fit) {
+  const c = formCircle();
+  updateReach(c);
+  $('a-mapbox').parentElement.classList.toggle('placed', !!c);
+  const m = amap.map;
+  if (!m || !amap.ready) { if (fit) amap.fitPending = true; return; }
+  const color = LEVEL_COLORS[$('a-level').value] || LEVEL_COLORS.warning;
+  m.setPaintProperty('alert-fill', 'fill-color', color);
+  m.setPaintProperty('alert-line', 'line-color', color);
+  m.setPaintProperty('zones-hit', 'line-color', color);
+  amap.pin.getElement().style.setProperty('--pin', color);
+  const ring = c ? circleRing(c.lat, c.lon, c.radiusKm) : null;
+  m.getSource('alert').setData({ type: 'FeatureCollection', features: ring ? [{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring] } }] : [] });
+  drawZones(c);
+  if (c) amap.pin.setLngLat([c.lon, c.lat]).addTo(m); else amap.pin.remove();
+  if (fit && c && !$('page-alerts').hidden) {
+    m.fitBounds(ringBounds([ring]), { padding: 48, maxZoom: 13, duration: 600 });
+    amap.fitPending = false;
+  } else if (fit) amap.fitPending = true;
+}
+
+function drawZones(c) {
+  const m = amap.map;
+  if (!m || !amap.ready) return;
+  m.getSource('zones').setData({ type: 'FeatureCollection', features: state.zones.map((z, i) => ({
+    type: 'Feature', id: i, properties: { i, hit: hits(c, z) },
+    geometry: { type: 'Polygon', coordinates: [circleRing(z.lat, z.lon, z.radiusKm)] },
+  })) });
+  // Zones show up with nothing placed yet: show where people are watching.
+  if (!c && state.zones.length && !amap.fittedZones && !$('page-alerts').hidden) {
+    amap.fittedZones = true;
+    m.fitBounds(ringBounds(state.zones.map((z) => circleRing(z.lat, z.lon, z.radiusKm))), { padding: 40, maxZoom: 10, duration: 0 });
+  }
+}
+
+/** The pin was put somewhere by hand: no longer aimed at one zone. */
+function placeAt(lat, lon) {
+  $('a-lat').value = lat.toFixed(4);
+  $('a-lon').value = lon.toFixed(4);
+  $('a-target').hidden = true;
+  $('a-zone').value = '';
+  updateMapLink();
+  syncMap(false);
+}
+
+function useZone(z, fit) {
+  setPlace({ lat: z.lat, lon: z.lon, radiusKm: z.radiusKm, zone: z.name || 'Unnamed zone', owner: ownerName(z) }, fit);
+  const i = state.zones.indexOf(z);
+  $('a-zone').value = i >= 0 ? String(i) : '';
+}
+
+function fillZoneSelect() {
+  const sel = $('a-zone');
+  const keep = sel.value;
+  sel.replaceChildren(el('option', { value: '', text: state.zones.length ? 'Pick a zone… (' + state.zones.length + ')' : 'No zones yet' }),
+    ...state.zones.map((z, i) => el('option', { value: String(i), text: (z.name || 'Unnamed zone') + ' · ' + ownerName(z) + ' · ' + z.radiusKm + ' km' })));
+  sel.value = keep && state.zones[Number(keep)] ? keep : '';
+  sel.disabled = state.zones.length === 0;
+}
+
+async function loadAlertZones() {
+  try {
+    const { zones } = await call('GET', '/admin/api/zones');
+    state.zones = zones;
+    setCount('zones', zones.length);
+  } catch { /* zones are off on this server: the map still works */ }
+  fillZoneSelect();
+  syncMap(false);
+}
+
+function setBasemap() {
+  const m = amap.map;
+  if (!m || !amap.ready) return;
+  const dark = isDark();
+  // OSM has no dark tiles: dim them so the map sits quietly in the dark theme.
+  m.setPaintProperty('base', 'raster-brightness-max', dark ? 0.62 : 1);
+  m.setPaintProperty('base', 'raster-saturation', dark ? -0.35 : 0);
+  m.setPaintProperty('base', 'raster-contrast', dark ? 0.1 : 0);
+  m.setPaintProperty('zones-line', 'line-color', dark ? '#c4b5fd' : ZONE_COLOR);
+  m.setPaintProperty('zones-fill', 'fill-color', dark ? '#a78bfa' : ZONE_COLOR);
+}
+
+function mapHint(text, error) {
+  const h = $('a-map-hint');
+  h.textContent = text;
+  h.classList.toggle('error', !!error);
+}
+
+/** MapLibre loads the first time the alerts page opens. */
+function ensureMap() {
+  if (amap.map) {
+    amap.map.resize();
+    if (amap.fitPending) syncMap(true); else drawZones(formCircle());
+    return;
+  }
+  if (amap.loading) return;
+  amap.loading = import('/admin/vendor/maplibre-gl.mjs').then((lib) => {
+    lib.setWorkerUrl('/admin/vendor/maplibre-gl-worker.mjs');
+    const osmTiles = { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 19,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors' };
+    const empty = { type: 'FeatureCollection', features: [] };
+    const c = formCircle();
+    const m = new lib.Map({
+      container: 'a-mapbox',
+      style: {
+        version: 8,
+        sources: {
+          osm: osmTiles,
+          zones: { type: 'geojson', data: empty },
+          alert: { type: 'geojson', data: empty },
+        },
+        layers: [
+          { id: 'base', type: 'raster', source: 'osm' },
+          { id: 'zones-fill', type: 'fill', source: 'zones', paint: { 'fill-color': ZONE_COLOR,
+            'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.32, ['get', 'hit'], 0.2, 0.12] } },
+          { id: 'zones-line', type: 'line', source: 'zones', paint: { 'line-color': ZONE_COLOR, 'line-width': 1.8, 'line-dasharray': [3, 2] } },
+          { id: 'zones-hit', type: 'line', source: 'zones', filter: ['==', ['get', 'hit'], true], paint: { 'line-color': LEVEL_COLORS.warning, 'line-width': 2 } },
+          { id: 'alert-fill', type: 'fill', source: 'alert', paint: { 'fill-color': LEVEL_COLORS.warning, 'fill-opacity': 0.14 } },
+          { id: 'alert-line', type: 'line', source: 'alert', paint: { 'line-color': LEVEL_COLORS.warning, 'line-width': 2.5 } },
+        ],
+      },
+      center: c ? [c.lon, c.lat] : DEFAULT_VIEW.center,
+      zoom: c ? 9 : DEFAULT_VIEW.zoom,
+      attributionControl: { compact: true },
+      dragRotate: false,
+      pitchWithRotate: false,
+    });
+    m.touchZoomRotate.disableRotation();
+    m.addControl(new lib.NavigationControl({ showCompass: false }), 'top-right');
+    amap.map = m;
+    amap.pin = new lib.Marker({ element: el('div', { class: 'pin', title: 'Drag to move the alert' }), draggable: true });
+    amap.pin.on('drag', () => { const p = amap.pin.getLngLat(); placeAt(p.lat, p.lng); });
+    amap.popup = new lib.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
+
+    let hovered = null;
+    const unhover = () => { if (hovered !== null) m.setFeatureState({ source: 'zones', id: hovered }, { hover: false }); hovered = null; };
+    m.on('mousemove', 'zones-fill', (e) => {
+      // The smallest zone under the pointer is the one you'd expect to pick.
+      const f = e.features.slice().sort(bySize)[0];
+      const z = f && state.zones[f.properties.i];
+      if (!z) return;
+      m.getCanvas().style.cursor = 'pointer';
+      if (hovered !== f.id) { unhover(); hovered = f.id; m.setFeatureState({ source: 'zones', id: hovered }, { hover: true }); }
+      amap.popup.setLngLat(e.lngLat).setDOMContent(el('div', null, [
+        el('b', { text: z.name || 'Unnamed zone' }), el('br'),
+        el('span', { text: ownerName(z) + ' · ' + z.radiusKm + ' km' }), el('br'),
+        el('span', { class: 'muted', text: 'Click to target this zone' }),
+      ])).addTo(m);
+    });
+    m.on('mouseleave', 'zones-fill', () => { m.getCanvas().style.cursor = ''; unhover(); amap.popup.remove(); });
+    m.on('click', (e) => {
+      const f = m.queryRenderedFeatures(e.point, { layers: ['zones-fill'] }).sort(bySize)[0];
+      if (f && state.zones[f.properties.i]) useZone(state.zones[f.properties.i], false);
+      else placeAt(e.lngLat.lat, e.lngLat.lng);
+    });
+    m.on('load', () => {
+      amap.ready = true;
+      setBasemap();
+      syncMap(amap.fitPending);
+    });
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', setBasemap);
+  }).catch(() => {
+    amap.loading = null;
+    mapHint('The map could not load. Enter the coordinates below instead.', true);
+  });
 }
 
 async function cancelAlert(b, btn) {
@@ -941,8 +1233,13 @@ document.addEventListener('DOMContentLoaded', () => {
   $('f-label').addEventListener('change', (e) => { state.label = e.target.value; refreshReports(); });
   $('more').addEventListener('click', () => loadList(false).catch(quiet));
   $('alert-form').addEventListener('submit', sendAlert);
-  $('a-lat').addEventListener('input', updateMapLink);
-  $('a-lon').addEventListener('input', updateMapLink);
+  for (const id of ['a-lat', 'a-lon']) {
+    $(id).addEventListener('input', () => { $('a-target').hidden = true; $('a-zone').value = ''; updateMapLink(); syncMap(false); });
+    $(id).addEventListener('change', () => syncMap(true));
+  }
+  for (const id of ['a-radius', 'a-radius-range']) $(id).addEventListener('input', (e) => { syncRadius(e.target); syncMap(false); });
+  $('a-level').addEventListener('change', () => syncMap(false));
+  $('a-zone').addEventListener('change', (e) => { const z = state.zones[Number(e.target.value)]; if (e.target.value !== '' && z) useZone(z, true); });
   $('u-q').addEventListener('input', () => { clearTimeout(userTimer); userTimer = setTimeout(loadUsers, 250); });
   $('u-filter').addEventListener('change', loadUsers);
   $('z-q').addEventListener('input', renderZones);
