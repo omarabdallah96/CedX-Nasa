@@ -19,9 +19,19 @@ function stored(): Theme | null {
 
 const systemTheme = (): Theme => (system.matches ? 'light' : 'dark');
 
+// The intro is a night scene (a globe in space) in both themes; only the tool follows the visitor's theme.
+// Starts from the same test as the inline script in index.html: a tool route is '#/<place>'.
+let nightStage = !/^#\/[a-z-]+$/.test(window.location.hash);
+
 function apply() {
-  document.documentElement.dataset.theme = stored() ?? systemTheme();
+  document.documentElement.dataset.theme = nightStage ? 'dark' : stored() ?? systemTheme();
   listeners.forEach((f) => f());
+}
+
+export function setNightStage(on: boolean) {
+  if (on === nightStage) return;
+  nightStage = on;
+  apply();
 }
 system.addEventListener('change', apply);
 apply();

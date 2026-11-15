@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { lastWeek, rangeSummary, selectionVerdict, type DatasetIndex } from './lib/analysis.ts';
 import { AnalysisClient, pickDataSource, type DataSource } from './lib/client.ts';
 import { parseBox, type BoxFailure } from './lib/coords.ts';
@@ -19,7 +19,7 @@ import { SeasonChart } from './components/SeasonChart.tsx';
 import { TrustPanel } from './components/TrustPanel.tsx';
 import { shortcuts, Verdict } from './components/Verdict.tsx';
 import { LangSwitch, useI18n } from './i18n/index.tsx';
-import { ThemeSwitch } from './lib/theme.tsx';
+import { setNightStage, ThemeSwitch } from './lib/theme.tsx';
 
 const SEAM_YEAR = 2012;
 
@@ -98,6 +98,9 @@ export function App() {
       alive = false;
     };
   }, [client, source]);
+
+  // Before paint, so neither phase shows a frame in the other's theme.
+  useLayoutEffect(() => setNightStage(phase === 'intro'), [phase]);
 
   useEffect(() => {
     const target = phase === 'tool' ? `#/${slug}` : '';

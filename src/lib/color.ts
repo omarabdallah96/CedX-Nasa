@@ -8,10 +8,12 @@ export const EMBER = [
   '#1f1b17', '#3a1d14', '#5c2412', '#832e0f', '#ab3f0d', '#cf5a12', '#ea7f24', '#f7a846', '#fccd78', '#fff0c2',
 ];
 
-// The same ramp for the light theme: lightness strictly decreasing from the
-// light chart surface, so zero activity still recedes and heat still deepens.
+// The same ramp for the light theme: lightness strictly decreasing (OKLab L
+// 0.95 → 0.27) from the light chart surface, so zero activity still recedes
+// and heat still deepens. The low steps are pale on purpose: most months are
+// quiet, and a saturated low end turns the whole chart orange.
 export const EMBER_LIGHT = [
-  '#ebe4d8', '#f8dca6', '#f4bf70', '#ec9b45', '#dd7426', '#c2531a', '#9f3a12', '#7a2a0e', '#561f0c', '#38150a',
+  '#f1ede7', '#fbe1c2', '#f9cd9b', '#f4b06c', '#eb8d41', '#d96b21', '#b95016', '#913a10', '#68290d', '#40180a',
 ];
 
 const toRgb = (hex: string) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
@@ -42,7 +44,7 @@ export function rampPosition(value: number, max: number): number {
 
 /** Text colour that stays readable on a ramp cell. */
 export function inkOn(t: number): string {
-  if (currentTheme() === 'light') return t > 0.55 ? '#fbf6ee' : '#1f1a14';
+  if (currentTheme() === 'light') return t > 0.62 ? '#ffffff' : '#17120d';
   return t > 0.6 ? '#1a1410' : '#f3ede4';
 }
 

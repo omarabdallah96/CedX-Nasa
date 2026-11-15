@@ -8,8 +8,7 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import { useI18n } from '../i18n/index.tsx';
 import type { Manifest } from '../lib/analysis.ts';
 import type { BBox } from '../lib/harmonize.ts';
-import { cssVar, EMBER, SERIES } from '../lib/color.ts';
-import { useTheme } from '../lib/theme.tsx';
+import { EMBER, SERIES } from '../lib/color.ts';
 import type { GlobeView } from '../lib/types.ts';
 import type { PointsResult } from '../worker/analysis.worker.ts';
 
@@ -75,7 +74,6 @@ interface Props {
 export function MapPanel(props: Props) {
   const { phase, view, countries, slug, bbox, drawing, onDraw, onPick, density, points, dataUrl } = props;
   const { t } = useI18n();
-  const theme = useTheme();
   const rtl = t.dir === 'rtl';
   const el = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -165,13 +163,6 @@ export function MapPanel(props: Props) {
       mapRef.current = null;
     };
   }, [dataUrl]);
-
-  // The space around the globe takes the page's theme; the imagery stays as NASA made it.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready) return;
-    map.setPaintProperty('space', 'background-color', cssVar('--map-space'));
-  }, [ready, theme]);
 
   // Country markers double as the picker on the globe.
   useEffect(() => {

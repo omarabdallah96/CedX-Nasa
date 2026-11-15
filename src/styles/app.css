@@ -1,5 +1,5 @@
 /* Firesight. Dark by default: the charts are about light on a dark ground.
-   The light theme keeps the same warm family on paper; data-theme is set in index.html. */
+   The light theme is for the tool only (the intro is always dark, see theme.tsx); data-theme is set in index.html. */
 :root {
   color-scheme: dark;
   --page: #0e0c0a;
@@ -35,31 +35,27 @@
   --gutter: clamp(16px, 4vw, 48px);
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
-/* Light: warm paper, the same ember family run dark-on-light. Text tokens hold AA on --page and the surfaces. */
+/* Light: warm white, white surfaces, the same ember family run dark-on-light. Text tokens hold AA on --page and the surfaces. */
 :root[data-theme='light'] {
   color-scheme: light;
-  --page: #f6f1e9;
-  --surface-1: #fcf9f4;
-  --surface-2: #ebe4d8;
-  --hairline: rgba(60, 38, 16, 0.12);
-  --hairline-strong: rgba(60, 38, 16, 0.24);
-  --ink: #1f1a14;
-  --ink-2: #4d443a;
-  --ink-3: #6b6054;
-  --accent: #d06318;
-  --accent-ink: #a64d0c;
+  --page: #fbf9f6;
+  --surface-1: #ffffff;
+  --surface-2: #f1ede7;
+  --hairline: rgba(41, 28, 14, 0.1);
+  --hairline-strong: rgba(41, 28, 14, 0.2);
+  --ink: #1c1814;
+  --ink-2: #4a433b;
+  --ink-3: #6f665b;
+  --accent: #d9661a;
+  --accent-ink: #a8480a;
   --critical: #b93434;
   --serious: #b4501c;
   --warning: #8a6200;
   --select-ring: #120d08;
-  --overlay: #fffdf9;
-  --overlay-shadow: 0 8px 24px rgba(60, 38, 16, 0.16);
-  --glass: rgba(252, 249, 244, 0.88);
-  --chip: rgba(252, 249, 244, 0.8);
-  --map-space: #e9e2d6;
-  --map-vignette: rgba(246, 241, 233, 0.8);
-  --ramp-gradient: linear-gradient(90deg, #ebe4d8, #f8dca6, #f4bf70, #ec9b45, #dd7426, #c2531a, #9f3a12, #7a2a0e, #561f0c, #38150a);
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%234d443a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m1.5 1.5 4.5 4.5 4.5-4.5'/%3E%3C/svg%3E");
+  --overlay: #ffffff;
+  --overlay-shadow: 0 1px 2px rgba(41, 28, 14, 0.08), 0 10px 28px rgba(41, 28, 14, 0.14);
+  --ramp-gradient: linear-gradient(90deg, #f1ede7, #fbe1c2, #f9cd9b, #f4b06c, #eb8d41, #d96b21, #b95016, #913a10, #68290d, #40180a);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%234a433b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m1.5 1.5 4.5 4.5 4.5-4.5'/%3E%3C/svg%3E");
 }
 ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 
@@ -196,7 +192,7 @@ input[type='checkbox']:checked {
   content: ''; position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(ellipse at 50% 45%, transparent 30%, var(--map-vignette) 100%);
 }
-.map[data-phase='tool'] { grid-area: map; min-height: 420px; border-radius: 18px; border: 1px solid var(--hairline); }
+.map[data-phase='tool'] { grid-area: map; min-height: 420px; border-radius: 18px; border: 1px solid var(--hairline); box-shadow: var(--overlay-shadow); }
 .map[data-drawing] { outline: 2px dashed var(--accent-ink); outline-offset: 3px; }
 .map-failed { position: absolute; inset: auto 16px 16px; padding: 12px 14px; border-radius: 10px; background: var(--surface-2); font-size: 14px; }
 .map-marker {
@@ -211,10 +207,10 @@ input[type='checkbox']:checked {
 }
 .map-marker:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .map:not([data-pick]) .map-marker { display: none; }
-.map .maplibregl-ctrl-attrib.maplibregl-ctrl, .map .maplibregl-ctrl-attrib.maplibregl-compact { font: 11px/1.4 var(--sans); background: var(--chip); color: var(--ink-2); }
-.map .maplibregl-ctrl-attrib a { color: var(--ink-2); }
+/* The credit sits on the satellite imagery in both themes, like the markers. */
+.map .maplibregl-ctrl-attrib.maplibregl-ctrl, .map .maplibregl-ctrl-attrib.maplibregl-compact { font: 11px/1.4 var(--sans); background: rgba(14, 12, 10, 0.7); color: #c4b9a8; }
+.map .maplibregl-ctrl-attrib a { color: #c4b9a8; }
 .map .maplibregl-ctrl-attrib-button { filter: invert(1); opacity: 0.7; }
-[data-theme='light'] .map .maplibregl-ctrl-attrib-button { filter: none; }
 
 /* ---------- Intro: scroll story ---------- */
 .intro { position: relative; z-index: 1; pointer-events: none; }
@@ -240,8 +236,6 @@ input[type='checkbox']:checked {
 .theme-switch { width: 40px; padding: 0; display: inline-grid; place-items: center; }
 .intro-actions .lang-switch:hover { background: var(--surface-2); }
 .scene { position: relative; z-index: 1; }
-/* On paper the dark story text can cross the dark globe: a paper halo, as on a map label, keeps it legible. */
-[data-theme='light'] .hero-inner, [data-theme='light'] .story-text { text-shadow: 0 0 2px var(--page), 0 0 10px var(--page), 0 0 22px var(--page); }
 
 .scene-hero { min-height: 100svh; display: flex; align-items: center; padding: 96px var(--gutter); }
 .hero-inner { display: grid; gap: 14px; justify-items: start; }

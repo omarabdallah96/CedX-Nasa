@@ -3,7 +3,6 @@ import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useGSAP } from '@gsap/react';
 import { LangSwitch, useI18n } from '../i18n/index.tsx';
-import { ThemeSwitch } from '../lib/theme.tsx';
 import { rampPosition, SERIES } from '../lib/color.ts';
 import { drawRings } from '../lib/rings.ts';
 import { dayIndex, FIRST_DAY, type Calendar } from '../lib/time.ts';
@@ -279,7 +278,6 @@ export function Intro({ summary, story, cal, onView, onOpen }: Props) {
     <main ref={root} className="intro">
       <div ref={veil} className="veil" aria-hidden="true" />
       <div className="intro-actions">
-        <ThemeSwitch />
         <LangSwitch />
         <button type="button" className="skip" onClick={() => onOpen(story.slug)}>{t.intro.skip}</button>
       </div>
