@@ -16,12 +16,15 @@ import { FORECAST_DAYS, ForecastUnavailableError, nearestCell, type CountryForec
 import { createRateLimit } from './ratelimit.ts';
 import { HELP_KM, MAX_FIRES, MAX_RESOURCE_KM, SafetyUnavailableError, type Safety } from './safety.ts';
 import { createAdmin } from './admin.ts';
+import type { Air } from './air.ts';
 import type { BroadcastStore } from './broadcasts.ts';
 import { MAX_ZONES, type AccountZone, type DeviceStore, type DeviceZone } from './devices.ts';
 import type { Push } from './push.ts';
 import { AccountError, MAX_NAME, MAX_PASSWORD, MIN_PASSWORD, normalizeEmail, type AccountStore, type User } from './accounts.ts';
 import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
 import { lastWeek, rangeSummary, selectionVerdict, type RangeSummary } from '../src/lib/analysis.ts';
+import { AirUnavailableError } from '../src/lib/air.ts';
+import { AIR_TEXT } from '../src/lib/airText.ts';
 import { parseBox } from '../src/lib/coords.ts';
 import type { BBox, Filters } from '../src/lib/harmonize.ts';
 import { ANSWER, monthWording, sourceText, verdictSentence } from '../src/lib/sentence.ts';
@@ -108,6 +111,8 @@ export interface AppOptions {
   safety?: Safety;
   /** Escape route requests per client per 10 minutes (each one asks outside services). */
   escapesPer10Min?: number;
+  /** Air quality at a point; /air answers 503 without it. */
+  air?: Air;
 }
 
 /** Arabic names, from pipeline/config.mjs. */
@@ -134,7 +139,7 @@ function clientKey(c: Context): string {
   }
 }
 
-export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts, devices, push, safety, escapesPer10Min = 40 }: AppOptions) {
+export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword, accounts, authPer15Min = 20, broadcasts, devices, push, safety, escapesPer10Min = 40, air }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
@@ -278,6 +283,7 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
         'GET /api/v1/resources?lat=&lon=&radiusKm=   water, civil defence, Red Cross, fire stations, hospitals, assembly points (OpenStreetMap)',
         'GET /api/v1/help?lat=&lon=   nearest civil defence, Red Cross, hospitals and fire stations to a person',
         'GET /api/v1/escape?lat=&lon=&fires=lat,lon;lat,lon   routes away from the fires, downwind danger areas',
+        'GET /api/v1/air?lat=&lon=&lang=en|ar   air quality now: safe or not, AQI, pollutants, CO2 in ppm and %, advice and safety tips',
       ],
     });
   });
@@ -649,6 +655,34 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
       fires: fires.length,
       source: SAFETY_SOURCE + s.routingProvider,
       note: SAFETY_NOTE,
+    });
+  });
+
+  // ---- Air quality: is it safe to breathe outside here ----
+  api.get('/air', async (c) => {
+    const query = c.req.query();
+    const at = point(query);
+    const lang = query.lang ?? 'en';
+    if (lang !== 'en' && lang !== 'ar') throw new ApiError(400, 'bad_parameter', 'lang must be en or ar.');
+    if (!air) throw new ApiError(503, 'air_unavailable', 'Air quality is not enabled on this server.');
+    let report;
+    try {
+      report = await air.at(at.lat, at.lon);
+    } catch (err) {
+      if (err instanceof AirUnavailableError) throw new ApiError(503, 'air_unavailable', 'The air quality service did not answer. Try again in a few minutes.');
+      throw err;
+    }
+    const text = AIR_TEXT[lang];
+    c.header('Cache-Control', 'public, max-age=600');
+    return c.json({
+      ...report,
+      label: text.level[report.level],
+      headline: text.headline[report.level],
+      advice: text.advice[report.level],
+      co2: report.co2 && { ...report.co2, label: text.co2Level[report.co2.level], note: text.co2Note(report.co2.ppm, report.co2.percent) },
+      tips: { smoke: text.tips.smoke, indoor: text.tips.indoor },
+      source: 'Copernicus CAMS air quality model through Open-Meteo. Index: US AQI. Concentrations in µg/m³.',
+      note: text.model,
     });
   });
 

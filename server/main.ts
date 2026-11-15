@@ -11,6 +11,7 @@ import { createAccountStore } from './accounts.ts';
 import { createBroadcastStore } from './broadcasts.ts';
 import { createDeviceStore } from './devices.ts';
 import { createPush, parseServiceAccount } from './push.ts';
+import { createAir } from './air.ts';
 import { createApp } from './app.ts';
 import { createForecast } from './forecast.ts';
 import { createLive } from './live.ts';
@@ -68,6 +69,8 @@ const app = createApp({
   // Nearby water and escape routes: OpenStreetMap, Open-Meteo, OSRM (ORS_API_KEY optional).
   safety: createSafety({ cacheDir: path.join(storageDir, 'places') }),
   escapesPer10Min: Number(process.env.ESCAPES_PER_10_MIN ?? 40),
+  // Air quality at a point: Open-Meteo (CAMS), no key.
+  air: createAir(),
 });
 const port = Number(process.env.PORT) || 8787;
 

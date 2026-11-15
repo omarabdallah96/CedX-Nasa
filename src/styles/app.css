@@ -605,6 +605,18 @@ td.cal-total { position: relative; white-space: nowrap; }
 .now-line { max-width: 52ch; color: var(--ink-2); }
 .now .btn { min-height: 36px; padding: 6px 14px; font-size: 13px; }
 
+/* Air quality card: the classes of the US AQI, from clean to dangerous. */
+.verdict-badge[data-air='good'] { color: var(--harmonized); }
+.verdict-badge[data-air='moderate'] { color: var(--warning); }
+.verdict-badge[data-air='sensitive'] { color: var(--serious); }
+.verdict-badge[data-air='unhealthy'], .verdict-badge[data-air='very-unhealthy'], .verdict-badge[data-air='hazardous'] { color: var(--critical); }
+.air-list { display: grid; gap: 6px; margin: 0; padding-inline-start: 18px; font-size: 14px; line-height: 1.55; color: var(--ink-2); max-width: 56ch; }
+.air-list:lang(ar) { line-height: 1.7; }
+.air-more { width: 100%; font-size: 14px; }
+.air-more summary { padding: 6px 0; font-weight: 500; color: var(--ink); cursor: pointer; }
+.air-more .note { margin-bottom: 8px; max-width: 56ch; }
+.air-model { font-size: 12px; }
+
 .period { display: grid; gap: 10px; margin: 6px 0 0; padding: 14px 0 0; border: 0; border-top: 1px solid var(--hairline); min-width: 0; }
 .period legend { float: inline-start; width: 100%; padding: 0; }
 .period-inputs { clear: both; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

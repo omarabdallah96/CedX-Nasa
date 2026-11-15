@@ -6,6 +6,7 @@
 // -8.6) are wrapped in a left-to-right isolate so they keep their order
 // inside right-to-left text.
 import type { Analysis, PeriodVerdict } from '../lib/analysis.ts';
+import { AIR_TEXT } from '../lib/airText.ts';
 import { fmtCount, fmtPct } from '../lib/format.ts';
 import { SRC_GAPFILL, SRC_N20, SRC_VIIRS } from '../lib/harmonize.ts';
 import type { Verdict } from '../lib/stats.ts';
@@ -267,6 +268,8 @@ export const ar: Strings = {
     showing: 'هذه الأيام السبعة معروضة على الخريطة',
     show: 'اعرض هذه الأيام السبعة على الخريطة',
   },
+
+  air: AIR_TEXT.ar,
 
   period: {
     title: 'التواريخ المعروضة على الخريطة',

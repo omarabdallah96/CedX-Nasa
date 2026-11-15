@@ -7,6 +7,7 @@ import { completeYears, seamStep } from './lib/stats.ts';
 import { buildCalendar, FIRST_DAY, isoDate, SEAM_DAY } from './lib/time.ts';
 import type { CountrySummary, GlobeView, IntroStory, SeamMode } from './lib/types.ts';
 import type { AnalyzeResult, PointsResult } from './worker/analysis.worker.ts';
+import { AirCard } from './components/AirCard.tsx';
 import { BurnCalendar } from './components/BurnCalendar.tsx';
 import { ExportMenu } from './components/ExportMenu.tsx';
 import { FireRings, type FireRingsHandle, type Selection } from './components/FireRings.tsx';
@@ -327,6 +328,14 @@ export function App() {
                 live={source?.live ?? false}
                 shown={weekShown}
                 onShow={() => setRange(weekShown ? null : { from: week.from, to: week.to })}
+              />
+            )}
+
+            {shownBox && (
+              <AirCard
+                centre={{ lat: (shownBox[1] + shownBox[3]) / 2, lon: (shownBox[0] + shownBox[2]) / 2 }}
+                place={place}
+                api={source?.live ? new URL('../', source.url).href : null}
               />
             )}
 

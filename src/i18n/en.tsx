@@ -3,6 +3,7 @@
 // functions in lib/sentence.ts, which this file wraps.
 import type { ReactNode } from 'react';
 import type { Analysis, Outage, PeriodVerdict } from '../lib/analysis.ts';
+import { AIR_TEXT } from '../lib/airText.ts';
 import type { BoxFailure } from '../lib/coords.ts';
 import { fmtCount, fmtPct, fmtRatio, ordinal } from '../lib/format.ts';
 import { ANSWER, monthWording, sourceText, verdictSentence } from '../lib/sentence.ts';
@@ -183,6 +184,9 @@ export const en = {
     showing: 'Showing these 7 days on the map',
     show: 'Show these 7 days on the map',
   },
+
+  /** Air quality card; shared with the API (lib/airText.ts). */
+  air: AIR_TEXT.en,
 
   period: {
     title: 'Dates shown on the map',

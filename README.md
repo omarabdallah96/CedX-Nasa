@@ -16,6 +16,7 @@ Built for the NASA Space Apps Challenge 2026, challenge "Harmonization of MODIS 
 - **Evidence.** Held-out validation, conversion factors by month, and what the record cannot tell you.
 - **Exports.** CSV of every hotspot in the period, with its weight in the harmonized record; the daily series and the whole calendar table as CSV; the calendar and the rings as PNG cards.
 - **API.** The same answers as JSON, for a phone app or anything else.
+- **Air quality.** Is the air safe to breathe at the middle of the map area or at your own location: the index, what drives it, CO2 as a percentage, and what to do.
 - **For the phone app.** Live hotspots minutes old from the FIRMS near-real-time feed, and ground reports (label, photo, compass bearing) that phones share so smoke seen by several people can be located.
 - **English and Arabic.** The whole site, the charts and the PNG cards switch language; Arabic is laid out right to left. The site opens in the browser's language, the switch in the header remembers the choice, and `?lang=ar` or `?lang=en` in the address forces one. The API and the CSV column names stay in English.
 
@@ -60,6 +61,7 @@ JSON under `/api/v1`, open CORS, no key needed. The record endpoints are read-on
 | `GET /countries/{slug}/live?hours=` | FIRMS near-real-time detections of the last 1–72 hours (default 48), fetched at most every 10 minutes. Needs `FIRMS_MAP_KEY` on the server, else 503 |
 | `GET /countries/{slug}/forecast?days=` | Fire danger for the next 1–16 days (default 7): per day the danger level, FWI median / 90th percentile / max over the country, share of the country at high or above, and the usual activity for that date from the record; plus every grid point's FWI for a map |
 | `GET /forecast?lat=&lon=&days=` | Fire danger at the nearest grid point: level, FWI and its components, noon weather, and the usual activity in the country. 404 outside the four countries |
+| `GET /air?lat=&lon=&lang=en\|ar` | Air quality now at any point on Earth: `safe` true or false, US AQI and its class, each pollutant, CO2 in ppm and as a percentage of the air, the worst hour of the next 24, what to do at this level, and safety tips for smoke and for CO2 and CO at home. Text in English or Arabic. From the Copernicus CAMS model through Open-Meteo, cached 20 minutes; a model on a 10–40 km grid, not a sensor |
 | `GET /data/{file}` | The packed data files the website loads |
 | `POST /reports` | A ground report from the phone app, as `multipart/form-data` (optional `photo`: JPEG, PNG or WebP up to 5 MB) or JSON. Returns the report and a `deleteToken` |
 | `GET /reports?bbox=&country=&since=&limit=` | Reports in an area since a time (default: the last 7 days) |
