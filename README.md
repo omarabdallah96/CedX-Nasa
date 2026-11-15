@@ -58,6 +58,8 @@ JSON under `/api/v1`, open CORS, no key needed. The record endpoints are read-on
 | `GET /countries/{slug}/hotspots?from=&to=&limit=&format=json\|csv` | Detections with their harmonized weight |
 | `GET /countries/{slug}/method` | Conversion factors, validation, limits |
 | `GET /countries/{slug}/live?hours=` | FIRMS near-real-time detections of the last 1–72 hours (default 48), fetched at most every 10 minutes. Needs `FIRMS_MAP_KEY` on the server, else 503 |
+| `GET /countries/{slug}/forecast?days=` | Fire danger for the next 1–16 days (default 7): per day the danger level, FWI median / 90th percentile / max over the country, share of the country at high or above, and the usual activity for that date from the record; plus every grid point's FWI for a map |
+| `GET /forecast?lat=&lon=&days=` | Fire danger at the nearest grid point: level, FWI and its components, noon weather, and the usual activity in the country. 404 outside the four countries |
 | `GET /data/{file}` | The packed data files the website loads |
 | `POST /reports` | A ground report from the phone app, as `multipart/form-data` (optional `photo`: JPEG, PNG or WebP up to 5 MB) or JSON. Returns the report and a `deleteToken` |
 | `GET /reports?bbox=&country=&since=&limit=` | Reports in an area since a time (default: the last 7 days) |
@@ -77,6 +79,14 @@ Report fields: `deviceId` and `clientId` (4–64 letters, digits, `-`, `_`; the 
 **Moderation.** `/admin` is a password-protected page (set `ADMIN_PASSWORD`) listing every report with its photo. A moderator can hide a report (kept, but no longer sent to phones), hide everything from one phone, or delete a report for good. Sign-in sets an HttpOnly, SameSite=Strict session cookie for 12 hours; password guesses are limited to 10 per 15 minutes; changing the password signs everyone out.
 
 There are no user accounts. Reports are stored in SQLite with their photos under `STORAGE_DIR` (default `./storage`; a volume in Docker). Each client gets 1200 requests per 10 minutes and 30 new reports per hour (`RATE_LIMIT_PER_10_MIN`, `REPORTS_PER_HOUR`); behind a proxy the client is the first `X-Forwarded-For` address. Put a proxy limit in front as well before exposing it widely.
+
+## Fire danger forecast
+
+`server/fwi.ts` is the Canadian Fire Weather Index (Van Wagner 1987), the index EFFIS uses for Europe, checked against the published reference day. `server/forecast.ts` runs it on a grid of at most 48 points inside each country (0.15° in Lebanon and Cyprus, 0.5–0.6° in Portugal and Greece) with Open-Meteo weather at local noon (free, no key).
+
+The index's moisture codes remember weeks to months of weather, so the first run of a country starts them on 1 January from the ERA5 archive. The codes are then saved in `STORAGE_DIR/forecast/` and each refresh only moves them forward through the days that have passed, before running the 16-day forecast. A forecast is recomputed every 3 hours; all four are computed a few seconds after start (`FORECAST_WARM=0` turns that off). The run-up uses many Open-Meteo calls, so when it hits their per-minute limit it waits a minute and tries again.
+
+Danger classes are EFFIS's: very low < 5.2, low < 11.2, moderate < 21.3, high < 38, very high < 50, extreme. A country's headline level is the 90th percentile point, so a few very dry valleys show. Fire danger says how readily fires start and spread with the weather, not where one will start: most fires here are lit by people.
 
 ## How the two records are stitched
 
@@ -113,7 +123,7 @@ The factor differs fourfold between these four countries, which is why it is fit
 pipeline/   fetch-firms.mjs · fetch-recent.mjs · clip.mjs · pack.mjs · boundaries.mjs · summarize.ts
 src/lib/    harmonize.ts · stats.ts · analysis.ts · service.ts · sentence.ts · rings.ts · coords.ts · time.ts   (+ harmonize.test.ts)
 src/worker/ analysis.worker.ts   runs lib/service.ts off the main thread
-server/     app.ts (routes) · main.ts · refresh.ts · live.ts (FIRMS NRT) · reports.ts (SQLite) · admin.ts + admin-page.ts (/admin) · ratelimit.ts   runs the same lib/service.ts   (+ api.test.ts, phone.test.ts, admin.test.ts)
+server/     app.ts (routes) · main.ts · refresh.ts · live.ts (FIRMS NRT) · fwi.ts + forecast.ts (fire danger) · reports.ts (SQLite) · admin.ts + admin-page.ts (/admin) · ratelimit.ts   runs the same lib/service.ts   (+ api.test.ts, phone.test.ts, admin.test.ts, forecast.test.ts)
 src/components/  MapPanel · Verdict · NowCard · PeriodPanel · FireRings · BurnCalendar · Records · SeasonChart · TrustPanel · ExportMenu · Intro
 src/i18n/   en.tsx (English wording, and the shape every language fills) · ar.tsx (Arabic) · index.tsx (which language is in use)   (+ i18n.test.ts)
 ```

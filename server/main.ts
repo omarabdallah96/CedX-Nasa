@@ -8,6 +8,7 @@ import { serve } from '@hono/node-server';
 import type { DatasetIndex } from '../src/lib/analysis.ts';
 import { createService } from '../src/lib/service.ts';
 import { createApp } from './app.ts';
+import { createForecast } from './forecast.ts';
 import { createLive } from './live.ts';
 import { startRefresh } from './refresh.ts';
 import { createReportStore } from './reports.ts';
@@ -35,12 +36,15 @@ const service = createService({
 
 const reports = createReportStore(storageDir);
 const live = createLive();
+// Fire weather moisture codes are kept with the reports so restarts do not redo the run-up.
+const forecast = createForecast({ stateDir: path.join(storageDir, 'forecast') });
 const app = createApp({
   service,
   dataDir,
   siteDir: existsSync(siteDir) ? siteDir : undefined,
   reports,
   live,
+  forecast,
   requestsPer10Min: Number(process.env.RATE_LIMIT_PER_10_MIN ?? 1200),
   reportsPerHour: Number(process.env.REPORTS_PER_HOUR ?? 30),
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
@@ -53,6 +57,8 @@ serve({ fetch: app.fetch, port }, (info) => {
   if (!live.available) console.log('live: FIRMS_MAP_KEY is not set, /live answers 503');
   if (!process.env.ADMIN_PASSWORD) console.log('admin: ADMIN_PASSWORD is not set, /admin is off');
   startRefresh(service);
+  // Fire danger forecast: computed once now, then again on demand every few hours.
+  if (process.env.FORECAST_WARM !== '0') setTimeout(() => void forecast.warm(), 5_000).unref();
   // Old reports are deleted daily.
   const prune = () => reports.prune().then((n) => n && console.log(`reports: removed ${n} older than 90 days`), console.error);
   void prune();

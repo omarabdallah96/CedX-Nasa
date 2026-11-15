@@ -11,6 +11,8 @@ import { bodyLimit } from 'hono/body-limit';
 import type { Context } from 'hono';
 import { COUNTRIES } from '../pipeline/config.mjs';
 import { LiveUnavailableError, MAX_HOURS, type Live } from './live.ts';
+import { DANGER_CLASSES, dangerLevel } from './fwi.ts';
+import { FORECAST_DAYS, ForecastUnavailableError, nearestCell, type CountryForecast, type Forecast } from './forecast.ts';
 import { createRateLimit } from './ratelimit.ts';
 import { createAdmin } from './admin.ts';
 import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
@@ -80,6 +82,8 @@ export interface AppOptions {
   reports?: ReportStore;
   /** Live FIRMS hotspots; /live answers 503 without it. */
   live?: Live;
+  /** Fire danger forecast; the /forecast endpoints answer 503 without it. */
+  forecast?: Forecast;
   /** Requests per client per 10 minutes across the API (0 turns limiting off). */
   requestsPer10Min?: number;
   /** New reports per client per hour. */
@@ -112,7 +116,7 @@ function clientKey(c: Context): string {
   }
 }
 
-export function createApp({ service, dataDir, siteDir, reports, live, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword }: AppOptions) {
+export function createApp({ service, dataDir, siteDir, reports, live, forecast, requestsPer10Min = 1200, reportsPerHour = 30, adminPassword }: AppOptions) {
   const app = new Hono();
   const api = new Hono();
 
@@ -234,6 +238,8 @@ export function createApp({ service, dataDir, siteDir, reports, live, requestsPe
         'GET /api/v1/countries/{slug}/hotspots?from=&to=&limit=&format=json|csv',
         'GET /api/v1/countries/{slug}/method',
         'GET /api/v1/countries/{slug}/live?hours=',
+        'GET /api/v1/countries/{slug}/forecast?days=',
+        'GET /api/v1/forecast?lat=&lon=&days=',
         'GET /api/v1/data/{file}',
         'POST /api/v1/reports',
         'GET /api/v1/reports?bbox=&country=&since=&limit=',
@@ -523,6 +529,134 @@ export function createApp({ service, dataDir, siteDir, reports, live, requestsPe
       note: 'Near-real-time detections are not filtered for industrial sites and can still be revised by NASA.',
       count: answer.hotspots.length,
       hotspots: answer.hotspots,
+    });
+  });
+
+  // ---- Fire danger forecast ----
+  const FORECAST_SOURCE = 'Weather: Open-Meteo (free forecast models, ERA5 archive for the run-up). Index: Canadian Fire Weather Index (Van Wagner 1987). Classes: EFFIS.';
+  const FORECAST_NOTE = 'Fire danger says how easily fires start and spread with this weather, not where one will start: most fires here are lit by people. Forecasts beyond about 7 days are uncertain.';
+  const forecastDays = (q: string | undefined) => int(q, 'days', 1, FORECAST_DAYS) ?? 7;
+
+  async function needForecast(slug: string): Promise<CountryForecast> {
+    if (!forecast) throw new ApiError(503, 'forecast_unavailable', 'The fire danger forecast is not enabled on this server.');
+    try {
+      return await forecast.country(slug);
+    } catch (err) {
+      if (err instanceof ForecastUnavailableError) throw new ApiError(503, 'forecast_unavailable', 'The weather service did not answer. Try again in a few minutes.');
+      throw err;
+    }
+  }
+
+  /** What the harmonized record says is usual for this date: median activity of its 5-day bin. */
+  async function usualFor(slug: string, dates: string[]) {
+    const { analysis: a } = await service.prepare(slug, { vegOnly: true, dropLowConf: true, bbox: null });
+    const peakBin = Math.max(...a.season.median, 1e-9);
+    const peakMonths = a.peak ? Array.from({ length: a.peak.length }, (_, k) => (a.peak!.start + k) % 12) : [];
+    return dates.map((date) => {
+      const t = Date.parse(`${date}T00:00:00Z`);
+      const doy = Math.round((t - Date.UTC(Number(date.slice(0, 4)), 0, 1)) / 86_400_000);
+      const bin = Math.min(PENTADS - 1, Math.floor(doy / 5));
+      return {
+        cellDaysPerDay: r1(a.season.median[bin] / 5),
+        highCellDaysPerDay: r1(a.season.p90[bin] / 5),
+        shareOfPeak: r3(a.season.median[bin] / peakBin),
+        inPeakSeason: peakMonths.includes(Number(date.slice(5, 7)) - 1),
+      };
+    });
+  }
+
+  const quantile = (sorted: number[], q: number) => {
+    const i = (sorted.length - 1) * q;
+    const lo = Math.floor(i);
+    return sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (i - lo);
+  };
+
+  api.get('/countries/:slug/forecast', async (c) => {
+    const slug = c.req.param('slug');
+    const index = await service.index();
+    const manifest = index.countries.find((m) => m.slug === slug);
+    if (!manifest) throw new ApiError(404, 'unknown_country', `No country "${slug}". Available: ${index.countries.map((m) => m.slug).join(', ')}.`);
+    const n = forecastDays(c.req.query('days'));
+    const f = await needForecast(slug);
+    const dates = f.dates.slice(0, n);
+    const usual = await usualFor(slug, dates);
+    c.header('Cache-Control', 'public, max-age=600');
+    return c.json({
+      country: { slug: manifest.slug, name: manifest.name },
+      generatedAt: f.generatedAt,
+      source: FORECAST_SOURCE,
+      note: FORECAST_NOTE,
+      classes: DANGER_CLASSES,
+      grid: { stepDegrees: f.grid.step, points: f.grid.cells.length },
+      days: dates.map((date, d) => {
+        const values = f.days.map((cell) => cell[d].fwi).sort((a, b) => a - b);
+        const p90 = quantile(values, 0.9);
+        const atLeast = (from: number) => r3(values.filter((v) => v >= from).length / values.length);
+        return {
+          date,
+          // The worst tenth of the country sets the headline: a few dry valleys matter.
+          level: dangerLevel(p90),
+          fwi: { median: r1(quantile(values, 0.5)), p90: r1(p90), max: r1(values[values.length - 1]) },
+          areaShare: { highOrAbove: atLeast(21.3), veryHighOrAbove: atLeast(38), extreme: atLeast(50) },
+          usual: usual[d],
+        };
+      }),
+      points: f.grid.cells.map((cell, i) => ({
+        lat: cell.lat,
+        lon: cell.lon,
+        fwi: f.days[i].slice(0, n).map((x) => r1(x.fwi)),
+        level: f.days[i].slice(0, n).map((x) => x.level),
+      })),
+    });
+  });
+
+  api.get('/forecast', async (c) => {
+    const query = c.req.query();
+    const lat = Number(query.lat);
+    const lon = Number(query.lon);
+    if (query.lat === undefined || query.lon === undefined || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      throw new ApiError(400, 'bad_parameter', 'lat and lon are required, in decimal degrees.');
+    }
+    const n = forecastDays(query.days);
+    if (!forecast) throw new ApiError(503, 'forecast_unavailable', 'The fire danger forecast is not enabled on this server.');
+    const index = await service.index();
+    // Countries whose box holds the point, then the nearest grid point among them.
+    let best: { slug: string; index: number; km: number; step: number } | null = null;
+    for (const m of index.countries) {
+      const [w, s, e, nn] = m.bbox;
+      if (lon < w - 0.5 || lon > e + 0.5 || lat < s - 0.5 || lat > nn + 0.5) continue;
+      const g = await forecast.grid(m.slug);
+      const near = nearestCell(g, lat, lon);
+      if (!best || near.km < best.km) best = { slug: m.slug, ...near, step: g.step };
+    }
+    if (!best || best.km > best.step * 111 * 1.5) {
+      throw new ApiError(404, 'outside_coverage', `The forecast covers ${index.countries.map((m) => m.name).join(', ')}.`);
+    }
+    const found = best;
+    const f = await needForecast(found.slug);
+    const manifest = index.countries.find((m) => m.slug === found.slug)!;
+    const cell = f.grid.cells[found.index];
+    const dates = f.dates.slice(0, n);
+    const usual = await usualFor(found.slug, dates);
+    c.header('Cache-Control', 'public, max-age=600');
+    return c.json({
+      country: { slug: manifest.slug, name: manifest.name },
+      point: { lat: cell.lat, lon: cell.lon, distanceKm: r1(found.km) },
+      generatedAt: f.generatedAt,
+      source: FORECAST_SOURCE,
+      note: FORECAST_NOTE,
+      classes: DANGER_CLASSES,
+      days: dates.map((date, d) => {
+        const x = f.days[found.index][d];
+        return {
+          date,
+          level: x.level,
+          fwi: r1(x.fwi),
+          components: { ffmc: r1(x.ffmc), dmc: r1(x.dmc), dc: r1(x.dc), isi: r1(x.isi), bui: r1(x.bui) },
+          weather: { tempC: r1(x.weather.temp), humidity: Math.round(x.weather.rh), windKmh: r1(x.weather.wind), rainMm: r1(x.weather.rain) },
+          usualInCountry: usual[d],
+        };
+      }),
     });
   });
 
