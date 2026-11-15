@@ -23,6 +23,11 @@ export interface DeviceZone {
   radiusKm: number;
 }
 
+/** A zone saved to an account, so a reinstall or another phone gets it back. */
+export interface AccountZone extends DeviceZone {
+  createdAt?: string;
+}
+
 export interface DeviceInput {
   /** Random id of the app install (not the hardware). */
   installationId: string;
@@ -102,6 +107,14 @@ export interface DeviceStore {
   latestByUser(userIds: string[]): Map<string, Device>;
   /** Signs a user's phones out (account deleted or signed out). */
   unlinkUser(userId: string): void;
+  /**
+   * The zones saved to an account. Until the app first saves them, falls back
+   * to the zones of the user's most recently updated phone (updatedAt null).
+   */
+  accountZones(userId: string): { zones: AccountZone[]; updatedAt: string | null };
+  setAccountZones(userId: string, zones: AccountZone[]): { zones: AccountZone[]; updatedAt: string };
+  /** Account deleted: forgets its saved zones. */
+  removeAccountZones(userId: string): void;
   stats(): DeviceStats;
   prune(): number;
   close(): void;
@@ -128,6 +141,11 @@ export function createDeviceStore(dir: string, { now = Date.now }: { now?: () =>
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS devices_user ON devices (user_id);
+    CREATE TABLE IF NOT EXISTS account_zones (
+      user_id TEXT PRIMARY KEY,
+      zones TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   const iso = (ms: number) => new Date(ms).toISOString();
   const byId = db.prepare('SELECT * FROM devices WHERE installation_id = ?');
@@ -184,6 +202,28 @@ export function createDeviceStore(dir: string, { now = Date.now }: { now?: () =>
 
     unlinkUser(userId) {
       db.prepare('UPDATE devices SET user_id = NULL WHERE user_id = ?').run(userId);
+    },
+
+    accountZones(userId) {
+      const saved = db.prepare('SELECT zones, updated_at FROM account_zones WHERE user_id = ?').get(userId) as
+        { zones: string; updated_at: string } | undefined;
+      if (saved) return { zones: JSON.parse(saved.zones) as AccountZone[], updatedAt: saved.updated_at };
+      const phone = db.prepare(`SELECT zones FROM devices WHERE user_id = ? AND zones != '[]' ORDER BY updated_at DESC LIMIT 1`)
+        .get(userId) as { zones: string } | undefined;
+      return { zones: phone ? (JSON.parse(phone.zones) as AccountZone[]) : [], updatedAt: null };
+    },
+
+    setAccountZones(userId, zones) {
+      const t = iso(now());
+      const kept = zones.slice(0, MAX_ZONES);
+      db.prepare(`INSERT INTO account_zones (user_id, zones, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT (user_id) DO UPDATE SET zones = excluded.zones, updated_at = excluded.updated_at`)
+        .run(userId, JSON.stringify(kept), t);
+      return { zones: kept, updatedAt: t };
+    },
+
+    removeAccountZones(userId) {
+      db.prepare('DELETE FROM account_zones WHERE user_id = ?').run(userId);
     },
 
     stats() {

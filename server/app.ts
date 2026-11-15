@@ -16,7 +16,7 @@ import { FORECAST_DAYS, ForecastUnavailableError, nearestCell, type CountryForec
 import { createRateLimit } from './ratelimit.ts';
 import { createAdmin } from './admin.ts';
 import type { BroadcastStore } from './broadcasts.ts';
-import { MAX_ZONES, type DeviceStore, type DeviceZone } from './devices.ts';
+import { MAX_ZONES, type AccountZone, type DeviceStore, type DeviceZone } from './devices.ts';
 import type { Push } from './push.ts';
 import { AccountError, MAX_NAME, MAX_PASSWORD, MIN_PASSWORD, normalizeEmail, type AccountStore, type User } from './accounts.ts';
 import { LABELS, MAX_NOTE, MAX_PHOTO_BYTES, PHOTO_TYPES, type Label, type NewReport, type ReportStore } from './reports.ts';
@@ -268,6 +268,8 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
         'GET /api/v1/broadcasts       (active zone alerts)',
         'PUT /api/v1/devices          {installationId, token?, platform, lang, location?, zones}  (instant alerts)',
         'DELETE /api/v1/devices/{installationId}',
+        'GET /api/v1/me/zones         (Authorization: Bearer <token>)  alert zones saved to the account',
+        'PUT /api/v1/me/zones         {zones}  (Authorization: Bearer <token>)',
       ],
     });
   });
@@ -849,6 +851,23 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     return devices;
   };
 
+  /** A zone list from a request body; createdAt is kept when it is a date. */
+  function readZones(list: unknown): AccountZone[] {
+    if (!Array.isArray(list) || list.length > MAX_ZONES) throw new ApiError(400, 'bad_parameter', `zones must be a list of at most ${MAX_ZONES}.`);
+    const okNum = (v: unknown, max: number) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= max;
+    return list.map((z: Record<string, unknown>) => {
+      if (!z || typeof z.id !== 'string' || z.id.length > 64 || typeof z.name !== 'string' || z.name.length > 60 ||
+        !okNum(z.lat, 90) || !okNum(z.lon, 180) || !okNum(z.radiusKm, 200) || (z.radiusKm as number) <= 0) {
+        throw new ApiError(400, 'bad_parameter', 'Each zone needs id, name, lat, lon and radiusKm.');
+      }
+      const at = typeof z.createdAt === 'string' ? Date.parse(z.createdAt) : NaN;
+      return {
+        id: z.id, name: z.name, lat: z.lat as number, lon: z.lon as number, radiusKm: z.radiusKm as number,
+        ...(!Number.isNaN(at) && { createdAt: new Date(at).toISOString() }),
+      };
+    });
+  }
+
   api.put('/devices', bodyLimit({
     maxSize: 64 * 1024,
     onError: () => { throw new ApiError(413, 'too_large', 'Too much data.'); },
@@ -876,14 +895,7 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
       const at = typeof loc.at === 'string' && !Number.isNaN(Date.parse(loc.at)) ? new Date(Math.min(Date.parse(loc.at), Date.now())).toISOString() : new Date().toISOString();
       location = { lat: loc.lat as number, lon: loc.lon as number, at };
     }
-    if (!Array.isArray(b.zones) || b.zones.length > MAX_ZONES) throw new ApiError(400, 'bad_parameter', `zones must be a list of at most ${MAX_ZONES}.`);
-    const zones: DeviceZone[] = b.zones.map((z: Record<string, unknown>) => {
-      if (!z || typeof z.id !== 'string' || z.id.length > 64 || typeof z.name !== 'string' || z.name.length > 60 ||
-        !okNum(z.lat, 90) || !okNum(z.lon, 180) || !okNum(z.radiusKm, 200) || (z.radiusKm as number) <= 0) {
-        throw new ApiError(400, 'bad_parameter', 'Each zone needs id, name, lat, lon and radiusKm.');
-      }
-      return { id: z.id, name: z.name, lat: z.lat as number, lon: z.lon as number, radiusKm: z.radiusKm as number };
-    });
+    const zones: DeviceZone[] = readZones(b.zones).map(({ id, name, lat, lon, radiusKm }) => ({ id, name, lat, lon, radiusKm }));
     // Signed in: link the phone to the account (the admin sees its last location).
     const authToken = /^Bearer\s+([A-Za-z0-9_-]{20,100})$/.exec(c.req.header('authorization') ?? '')?.[1];
     const user = authToken && accounts ? accounts.authenticate(authToken) : null;
@@ -1001,6 +1013,23 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     return c.json({ user: needAccounts().updateName(user.id, name) });
   });
 
+  // Alert zones saved to the account: a reinstall or a second phone gets them back.
+  api.get('/me/zones', (c) => {
+    const user = signedIn(c);
+    c.header('Cache-Control', 'no-store');
+    return c.json(needDevices().accountZones(user.id));
+  });
+
+  api.put('/me/zones', bodyLimit({
+    maxSize: 64 * 1024,
+    onError: () => { throw new ApiError(413, 'too_large', 'Too much data.'); },
+  }), async (c) => {
+    const user = signedIn(c);
+    const zones = readZones((await jsonBody(c)).zones);
+    c.header('Cache-Control', 'no-store');
+    return c.json(needDevices().setAccountZones(user.id, zones));
+  });
+
   api.post('/auth/logout', (c) => {
     const token = bearer(c);
     if (token && accounts) accounts.logout(token);
@@ -1017,6 +1046,7 @@ export function createApp({ service, dataDir, siteDir, reports, live, forecast, 
     await store.login({ email: user.email, password }).catch(accountError);
     store.remove(user.id);
     devices?.unlinkUser(user.id);
+    devices?.removeAccountZones(user.id);
     return c.json({ deleted: true });
   });
 
