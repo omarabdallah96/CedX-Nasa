@@ -1,7 +1,24 @@
-// The /admin page: sign-in, then tabs for report moderation, zone alerts
-// sent to phones, and user plans. Plain HTML, CSS
-// and JS served by the API (no build step). User text is only ever set with
-// textContent, never as HTML.
+// The /admin page: sign-in, then a sidebar with pages for report moderation,
+// zone alerts sent to phones, user plans and every user's alert zones.
+// Plain HTML, CSS and JS served by the API (no build step). User text is only
+// ever set with textContent, never as HTML. The page in view lives in the URL
+// hash (#reports, #alerts, #users, #zones), so reloading keeps your place.
+
+const icon = (paths: string) =>
+  `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+
+const ICONS = {
+  reports: icon('<path d="M4 4h16v12H8l-4 4z"/><path d="M8 9h8M8 12h5"/>'),
+  alerts: icon('<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
+  users: icon('<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/>'),
+  zones: icon('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>'),
+  menu: icon('<path d="M4 6h16M4 12h16M4 18h16"/>'),
+  out: icon('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>'),
+  refresh: icon('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
+};
+
+const nav = (page: keyof typeof ICONS, label: string) =>
+  `<a href="#${page}" class="nav" data-page="${page}">${ICONS[page]}<span>${label}</span><span class="count" id="n-${page}"></span></a>`;
 
 export const ADMIN_HTML = `<!doctype html>
 <html lang="en">
@@ -15,102 +32,146 @@ export const ADMIN_HTML = `<!doctype html>
 <script src="/admin/app.js" defer></script>
 </head>
 <body>
-<header class="top">
-  <div class="brand"><span class="dot"></span>Firesight <span class="muted">admin</span></div>
-  <nav id="tabs" class="tabs" hidden>
-    <button data-tab="reports" class="tab on">Reports</button>
-    <button data-tab="alerts" class="tab">Zone alerts</button>
-    <button data-tab="users" class="tab">Users</button>
-  </nav>
-  <button id="logout" class="ghost" hidden>Sign out</button>
-</header>
+<section id="loading" class="center"><p class="muted">Loading…</p></section>
 
-<main>
-  <section id="loading" class="center"><p class="muted">Loading…</p></section>
+<section id="login" class="center" hidden>
+  <form id="login-form" class="card login" autocomplete="on">
+    <div class="brand"><span class="dot"></span>Firesight <span class="muted">admin</span></div>
+    <h1>Sign in</h1>
+    <p class="muted">Moderate reports, send zone alerts and manage users.</p>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+    <button type="submit" class="primary" id="login-btn">Sign in</button>
+    <p id="login-error" class="error" role="alert"></p>
+  </form>
+  <div id="not-configured" class="card login" hidden>
+    <h1>Admin is off</h1>
+    <p class="muted">Set <code>ADMIN_PASSWORD</code> in the server's environment and redeploy.</p>
+  </div>
+</section>
 
-  <section id="login" class="center" hidden>
-    <form id="login-form" class="card login" autocomplete="on">
-      <h1>Sign in</h1>
-      <p class="muted">Moderate ground reports sent from the phone app.</p>
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
-      <button type="submit" class="primary" id="login-btn">Sign in</button>
-      <p id="login-error" class="error" role="alert"></p>
-    </form>
-    <div id="not-configured" class="card login" hidden>
-      <h1>Admin is off</h1>
-      <p class="muted">Set <code>ADMIN_PASSWORD</code> in the server's environment and redeploy.</p>
+<div id="app" class="shell" hidden>
+  <aside id="side" class="side" aria-label="Sections">
+    <div class="brand side-brand"><span class="dot"></span>Firesight <span class="muted">admin</span></div>
+    <nav class="navs">
+      ${nav('reports', 'Reports')}
+      ${nav('alerts', 'Zone alerts')}
+      ${nav('users', 'Users')}
+      ${nav('zones', 'Zones')}
+    </nav>
+    <div class="side-foot">
+      <button id="logout" class="nav navbtn">${ICONS.out}<span>Sign out</span></button>
     </div>
-  </section>
+  </aside>
+  <div id="scrim" class="scrim" hidden></div>
 
-  <section id="dash" hidden>
-   <div id="tab-reports">
-    <div class="stats" id="stats"></div>
-
-    <div class="filters card">
-      <label>Status
-        <select id="f-status">
-          <option value="all">All</option>
-          <option value="visible">Visible</option>
-          <option value="hidden">Hidden</option>
-        </select>
-      </label>
-      <label>Label
-        <select id="f-label"><option value="">All labels</option></select>
-      </label>
-      <span id="f-device" class="chip" hidden></span>
-      <button id="refresh" class="ghost">Refresh</button>
-    </div>
-
-    <p id="list-empty" class="muted center-text" hidden>No reports match.</p>
-    <ul id="list" class="list"></ul>
-    <div class="center-text"><button id="more" class="ghost" hidden>Load more</button></div>
-   </div>
-
-   <div id="tab-alerts" hidden>
-    <form id="alert-form" class="card form">
-      <h2>Send a zone alert</h2>
-      <p class="muted">Pushed right away to every phone whose alert zone overlaps this circle, or whose last location is inside it. Phones without push pick it up at their next check.</p>
-      <p id="a-phones" class="phones"></p>
-      <div class="grid2">
-        <label>Title (English)<input id="a-title" maxlength="80" required placeholder="Wildfire near Qornet es Saouda"></label>
-        <label>Title (Arabic, optional)<input id="a-title-ar" maxlength="80" dir="rtl"></label>
-        <label>Message (English)<textarea id="a-message" maxlength="500" rows="3" required placeholder="Civil Defence is on site. Avoid the area and keep windows closed."></textarea></label>
-        <label>Message (Arabic, optional)<textarea id="a-message-ar" maxlength="500" rows="3" dir="rtl"></textarea></label>
+  <div class="content">
+    <header class="bar">
+      <button id="menu" class="iconbtn" aria-label="Open menu" aria-controls="side" aria-expanded="false">${ICONS.menu}</button>
+      <div class="bar-text">
+        <h1 id="page-title">Reports</h1>
+        <p id="page-sub" class="muted"></p>
       </div>
-      <div class="grid4">
-        <label>Latitude<input id="a-lat" inputmode="decimal" required placeholder="33.90"></label>
-        <label>Longitude<input id="a-lon" inputmode="decimal" required placeholder="35.80"></label>
-        <label>Radius (km)<input id="a-radius" type="number" min="0.5" max="200" step="0.5" value="10" required></label>
-        <label>Active for (hours)<input id="a-hours" type="number" min="1" max="336" value="24" required></label>
-      </div>
-      <div class="row">
-        <label>Level
-          <select id="a-level">
-            <option value="danger">Danger (urgent)</option>
-            <option value="warning" selected>Warning</option>
-            <option value="info">Info</option>
-          </select>
-        </label>
-        <a id="a-map" target="_blank" rel="noopener noreferrer" class="muted">Check the place on a map</a>
-        <button type="submit" class="primary" id="a-send">Send alert</button>
-      </div>
-      <p id="a-error" class="error" role="alert"></p>
-    </form>
-    <h2 class="h2">Recent alerts</h2>
-    <p id="alerts-empty" class="muted" hidden>No alerts sent yet.</p>
-    <ul id="alerts" class="list"></ul>
-   </div>
+      <button id="reload" class="iconbtn" title="Reload this page's data" aria-label="Reload">${ICONS.refresh}</button>
+    </header>
 
-   <div id="tab-users" hidden>
-    <div class="filters card">
-      <label>Find by email<input id="u-q" type="search" placeholder="name@example.com"></label>
-      <span id="u-total" class="muted"></span>
-    </div>
-    <ul id="users" class="list"></ul>
-   </div>
-  </section>
-</main>
+    <main>
+      <div id="page-reports" class="page" hidden>
+        <div class="stats" id="stats"></div>
+        <div class="filters card">
+          <label>Status
+            <select id="f-status">
+              <option value="all">All</option>
+              <option value="visible">Visible</option>
+              <option value="hidden">Hidden</option>
+            </select>
+          </label>
+          <label>Label
+            <select id="f-label"><option value="">All labels</option></select>
+          </label>
+          <span id="f-device" class="chip" hidden></span>
+        </div>
+        <p id="list-empty" class="empty-state" hidden>No reports match these filters.</p>
+        <ul id="list" class="list"></ul>
+        <div class="center-text"><button id="more" class="ghost" hidden>Load more</button></div>
+      </div>
+
+      <div id="page-alerts" class="page" hidden>
+        <form id="alert-form" class="card form">
+          <h2>Send a zone alert</h2>
+          <p class="muted">Pushed right away to every phone whose alert zone overlaps this circle, or whose last location is inside it. Phones without push pick it up at their next check. Tip: use “Alert this zone” on the Zones or Users page to fill in the place.</p>
+          <p id="a-target" class="chip" hidden></p>
+          <p id="a-phones" class="phones"></p>
+          <div class="grid2">
+            <label>Title (English)<input id="a-title" maxlength="80" required placeholder="Wildfire near Qornet es Saouda"></label>
+            <label>Title (Arabic, optional)<input id="a-title-ar" maxlength="80" dir="rtl"></label>
+            <label>Message (English)<textarea id="a-message" maxlength="500" rows="3" required placeholder="Civil Defence is on site. Avoid the area and keep windows closed."></textarea></label>
+            <label>Message (Arabic, optional)<textarea id="a-message-ar" maxlength="500" rows="3" dir="rtl"></textarea></label>
+          </div>
+          <div class="grid4">
+            <label>Latitude<input id="a-lat" inputmode="decimal" required placeholder="33.90"></label>
+            <label>Longitude<input id="a-lon" inputmode="decimal" required placeholder="35.80"></label>
+            <label>Radius (km)<input id="a-radius" type="number" min="0.5" max="200" step="0.5" value="10" required></label>
+            <label>Active for (hours)<input id="a-hours" type="number" min="1" max="336" value="24" required></label>
+          </div>
+          <div class="row">
+            <label>Level
+              <select id="a-level">
+                <option value="danger">Danger (urgent)</option>
+                <option value="warning" selected>Warning</option>
+                <option value="info">Info</option>
+              </select>
+            </label>
+            <a id="a-map" target="_blank" rel="noopener noreferrer">Check the place on a map ↗</a>
+            <button type="submit" class="primary" id="a-send">Send alert</button>
+          </div>
+          <p id="a-error" class="error" role="alert"></p>
+        </form>
+        <h2 class="h2">Recent alerts</h2>
+        <p id="alerts-empty" class="empty-state" hidden>No alerts sent yet.</p>
+        <ul id="alerts" class="list"></ul>
+      </div>
+
+      <div id="page-users" class="page" hidden>
+        <div class="filters card">
+          <label class="grow">Find by email<input id="u-q" type="search" placeholder="name@example.com"></label>
+          <label>Show
+            <select id="u-filter">
+              <option value="">Everyone</option>
+              <option value="zones">With alert zones</option>
+              <option value="pro">Pro only</option>
+            </select>
+          </label>
+          <span id="u-total" class="muted"></span>
+        </div>
+        <p id="users-empty" class="empty-state" hidden>No users match.</p>
+        <ul id="users" class="list"></ul>
+      </div>
+
+      <div id="page-zones" class="page" hidden>
+        <div class="stats" id="z-stats"></div>
+        <div class="filters card">
+          <label class="grow">Search zones<input id="z-q" type="search" placeholder="Zone name or email"></label>
+          <label>Owner
+            <select id="z-owner">
+              <option value="">Everyone</option>
+              <option value="user">Accounts</option>
+              <option value="guest">Guest phones</option>
+            </select>
+          </label>
+          <span id="z-total" class="muted"></span>
+        </div>
+        <p id="zones-empty" class="empty-state" hidden>No zones match.</p>
+        <div class="card table-wrap" id="zones-wrap">
+          <table class="table" id="zones-table">
+            <thead><tr><th>Zone</th><th>Owner</th><th>Center</th><th>Radius</th><th>Updated</th><th></th></tr></thead>
+            <tbody id="zones"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
 
 <div id="toast" class="toast" role="status" hidden></div>
 <dialog id="viewer"><img id="viewer-img" alt="Report photo"><form method="dialog"><button class="ghost">Close</button></form></dialog>
@@ -121,12 +182,14 @@ export const ADMIN_CSS = `
 :root {
   --bg: #f6f3ee; --surface: #ffffff; --ink: #1d1a16; --muted: #6b645a; --line: #e4ddd2;
   --accent: #c2410c; --accent-ink: #ffffff; --danger: #b91c1c; --ok: #15803d; --hidden-bg: #fbf4e9;
+  --side: #1d1a16; --side-ink: #e9e2d8; --side-muted: #a39a8d; --side-hover: #2b2621; --side-on: #3a322a;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #14110e; --surface: #1e1a16; --ink: #f1ebe2; --muted: #a39a8d; --line: #332c25;
     --accent: #f97316; --accent-ink: #1a0d03; --danger: #f87171; --ok: #4ade80; --hidden-bg: #2a2118;
+    --side: #0f0d0b; --side-ink: #f1ebe2; --side-muted: #8f877b; --side-hover: #1e1a16; --side-on: #2a241e;
     color-scheme: dark;
   }
 }
@@ -136,37 +199,89 @@ body { margin: 0; background: var(--bg); color: var(--ink);
 [hidden] { display: none !important; }
 code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; }
 .muted { color: var(--muted); }
-.top { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px;
-  border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 2; }
-.brand { font-weight: 650; letter-spacing: .2px; display: flex; align-items: center; gap: 8px; }
-.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); }
-main { max-width: 980px; margin: 0 auto; padding: 20px 16px 60px; }
-.center { min-height: 60vh; display: grid; place-items: center; }
+.center { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
 .center-text { text-align: center; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.ico { width: 20px; height: 20px; flex: none; }
+
+/* Sign-in */
 .login { width: min(380px, 100%); padding: 28px; display: grid; gap: 10px; }
-.login h1 { margin: 0; font-size: 22px; }
+.login h1 { margin: 6px 0 0; font-size: 22px; }
 .login p { margin: 0 0 8px; }
+.brand { font-weight: 650; letter-spacing: .2px; display: flex; align-items: center; gap: 8px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); }
+
+/* Shell: sidebar + content */
+.shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+.side { background: var(--side); color: var(--side-ink); display: flex; flex-direction: column; gap: 6px;
+  padding: 18px 12px; position: sticky; top: 0; height: 100vh; }
+.side-brand { padding: 4px 10px 18px; font-size: 16px; }
+.side-brand .muted { color: var(--side-muted); }
+.navs { display: grid; gap: 2px; }
+.nav { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 8px;
+  color: var(--side-muted); text-decoration: none; font-weight: 550; min-height: 42px; }
+.nav:hover { background: var(--side-hover); color: var(--side-ink); }
+.nav.on { background: var(--side-on); color: var(--side-ink); }
+.nav.on .ico { color: var(--accent); }
+.nav:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.count { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--side-muted);
+  background: var(--side-hover); border-radius: 999px; padding: 1px 8px; }
+.count:empty { display: none; }
+.side-foot { margin-top: auto; border-top: 1px solid var(--side-on); padding-top: 10px; }
+.navbtn { width: 100%; border: 0; background: none; font: inherit; cursor: pointer; text-align: left; }
+.scrim { position: fixed; inset: 0; background: rgb(0 0 0 / .45); z-index: 9; }
+
+.content { min-width: 0; display: flex; flex-direction: column; }
+.bar { display: flex; align-items: center; gap: 12px; padding: 14px 24px; background: var(--surface);
+  border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+.bar-text { min-width: 0; flex: 1; }
+.bar h1 { margin: 0; font-size: 19px; }
+.bar p { margin: 0; font-size: 13.5px; }
+.iconbtn { display: inline-grid; place-items: center; width: 40px; height: 40px; padding: 0; border-radius: 8px; }
+#menu { display: none; }
+main { width: 100%; max-width: 1080px; padding: 20px 24px 60px; }
+
+/* Controls */
 label { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
-input, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+input, select, textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
   border-radius: 8px; padding: 9px 11px; min-height: 40px; }
-input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+textarea { resize: vertical; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button { font: inherit; border-radius: 8px; padding: 8px 14px; min-height: 38px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
 button:disabled { opacity: .55; cursor: default; }
 .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.primary:hover:not(:disabled) { border-color: var(--accent); filter: brightness(1.06); }
 .ghost { background: transparent; }
+.small { min-height: 32px; padding: 4px 10px; font-size: 13.5px; }
 .danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
 .error { color: var(--danger); min-height: 1.2em; margin: 0; font-size: 14px; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
+a { color: var(--accent); }
+.linkish { border: 0; background: none; padding: 0; min-height: 0; color: var(--accent); text-decoration: underline; font-size: inherit; }
+
+/* Blocks */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .stat { padding: 12px 14px; }
 .stat b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
 .stat span { font-size: 12.5px; color: var(--muted); }
 .filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 12px 14px; margin-bottom: 14px; }
-.filters #refresh { margin-left: auto; }
-.chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px;
-  background: var(--hidden-bg); border: 1px solid var(--line); font-size: 13px; }
+.filters .grow { flex: 1 1 220px; }
+.filters > .muted { margin-left: auto; font-size: 13.5px; padding-bottom: 10px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+  background: var(--hidden-bg); border: 1px solid var(--line); font-size: 13px; margin: 0; width: fit-content; }
 .chip button { min-height: 0; padding: 0 4px; border: 0; background: none; color: var(--muted); }
+.empty-state { text-align: center; color: var(--muted); padding: 32px 16px; border: 1px dashed var(--line); border-radius: 12px; }
 .list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 13.5px; }
+.badge { font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); white-space: nowrap; }
+.badge.wildfire, .badge.smoke, .badge.warning { color: var(--accent); }
+.badge.hidden, .badge.danger { color: var(--danger); }
+.badge.pro { color: var(--ok); }
+.note { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.note.empty { color: var(--muted); font-style: italic; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+/* Reports */
 .item { display: grid; grid-template-columns: 112px 1fr; gap: 14px; padding: 12px; }
 .item.is-hidden { background: var(--hidden-bg); }
 .thumb { width: 112px; height: 112px; border-radius: 8px; object-fit: cover; background: var(--bg);
@@ -174,55 +289,103 @@ button:disabled { opacity: .55; cursor: default; }
 .thumb.empty { cursor: default; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 7px; }
 .meta { min-width: 0; display: grid; gap: 6px; align-content: start; }
-.row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 13.5px; }
-.badge { font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); }
-.badge.wildfire, .badge.smoke { color: var(--accent); }
-.badge.hidden { color: var(--danger); }
-.note { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.note.empty { color: var(--muted); font-style: italic; }
-a { color: var(--accent); }
-.linkish { border: 0; background: none; padding: 0; min-height: 0; color: var(--accent); text-decoration: underline; font-size: 13.5px; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
-.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg);
-  padding: 10px 16px; border-radius: 8px; font-size: 14px; max-width: calc(100% - 32px); }
-dialog { border: 0; border-radius: 12px; padding: 12px; background: var(--surface); color: var(--ink); max-width: min(92vw, 1100px); }
-dialog::backdrop { background: rgb(0 0 0 / .7); }
-dialog img { display: block; max-width: 100%; max-height: 80vh; border-radius: 8px; }
-dialog form { text-align: right; margin-top: 8px; }
-.tabs { display: flex; gap: 4px; margin: 0 auto 0 24px; }
-.tab { border: 0; background: none; color: var(--muted); font-weight: 600; }
-.tab.on { color: var(--ink); background: var(--bg); }
+
+/* Alerts */
 .form { padding: 18px; display: grid; gap: 12px; margin-bottom: 18px; }
-.form h2, .h2 { margin: 0; font-size: 18px; }
+.form h2, .h2 { margin: 0; font-size: 17px; }
 .h2 { margin: 6px 0 10px; }
 .form p { margin: 0; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; resize: vertical; }
 .form .row #a-send { margin-left: auto; }
-.alert-item, .user-item { padding: 12px 14px; display: grid; gap: 6px; }
+.alert-item { padding: 12px 14px; display: grid; gap: 6px; }
 .alert-item.over { opacity: .6; }
 .phones { font-size: 13.5px; }
 .phones .off { color: var(--danger); }
-.badge.danger { color: var(--danger); }
-.badge.warning { color: var(--accent); }
-.badge.pro { color: var(--ok); }
+
+/* Users */
+.user-item { padding: 14px; display: grid; gap: 10px; }
+.user-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.avatar { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--accent); font-weight: 700; }
+.who { min-width: 0; flex: 1; display: grid; }
+.who b { overflow-wrap: anywhere; }
+.who span { font-size: 13px; }
+.user-head > button { margin-left: auto; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13.5px; color: var(--muted); }
+details.zones { border-top: 1px solid var(--line); padding-top: 8px; }
+details.zones summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 4px 0; }
+details.zones summary .muted { font-weight: 400; }
+.zone-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.zone { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 8px 10px; border-radius: 8px;
+  background: var(--bg); font-size: 13.5px; }
+.zone b { min-width: 120px; }
+.zone button { margin-left: auto; }
+.ring { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--accent); flex: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+
+/* Zones table */
+.table-wrap { overflow: hidden; }
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.table td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.table tr:last-child td { border-bottom: 0; }
+.table tbody tr:hover { background: color-mix(in srgb, var(--bg) 60%, transparent); }
+.table td:last-child { text-align: right; white-space: nowrap; }
+.zname { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.owner { display: grid; }
+.owner span { font-size: 12.5px; }
+.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+  padding: 10px 16px; border-radius: 8px; font-size: 14px; max-width: calc(100% - 32px); z-index: 20; }
+dialog { border: 0; border-radius: 12px; padding: 12px; background: var(--surface); color: var(--ink); max-width: min(92vw, 1100px); }
+dialog::backdrop { background: rgb(0 0 0 / .7); }
+dialog img { display: block; max-width: 100%; max-height: 80vh; border-radius: 8px; }
+dialog form { text-align: right; margin-top: 8px; }
+
+/* Narrow screens: the sidebar slides in from the menu button. */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .side { position: fixed; left: 0; top: 0; bottom: 0; width: 260px; z-index: 10; transform: translateX(-100%);
+    transition: transform .2s ease; }
+  .side.open { transform: none; box-shadow: 0 0 40px rgb(0 0 0 / .35); }
+  #menu { display: inline-grid; }
+  .bar { padding: 10px 16px; }
+  main { padding: 16px 16px 60px; }
+  .grid4 { grid-template-columns: 1fr 1fr; }
+}
 @media (max-width: 720px) {
-  .grid2, .grid4 { grid-template-columns: 1fr 1fr; }
-  .tabs { margin-left: 8px; }
+  .grid2 { grid-template-columns: 1fr; }
+  /* The zones table turns into cards. */
+  .table thead { display: none; }
+  .table, .table tbody, .table tr, .table td { display: block; }
+  .table tr { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .table tr:last-child { border-bottom: 0; }
+  .table td { padding: 3px 0; border: 0; display: flex; gap: 10px; }
+  .table td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 12.5px; min-width: 70px; }
+  .table td:last-child { text-align: left; padding-top: 8px; }
 }
 @media (max-width: 560px) {
   .item { grid-template-columns: 76px 1fr; gap: 10px; }
   .thumb { width: 76px; height: 76px; }
-  .filters #refresh { margin-left: 0; }
+  .user-head > button { margin-left: 50px; }
 }
+@media (prefers-reduced-motion: reduce) { .side { transition: none; } }
 `;
 
 export const ADMIN_JS = `
 'use strict';
 const $ = (id) => document.getElementById(id);
 const LABEL_NAMES = { wildfire: 'Wildfire', smoke: 'Smoke', agriculturalBurn: 'Agricultural burn', industrial: 'Industrial', falseAlarm: 'False alarm', unsure: 'Unsure' };
-const state = { status: 'all', label: '', device: '', before: null, photoUrls: [] };
+const PAGES = {
+  reports: { title: 'Reports', sub: 'Ground reports sent from the phone app. Hide or delete anything that should not be shown.' },
+  alerts: { title: 'Zone alerts', sub: 'Send a message to every phone in an area.' },
+  users: { title: 'Users', sub: 'Accounts, their plan, phone and alert zones.' },
+  zones: { title: 'Zones', sub: 'Every alert zone people are watching, and who it belongs to.' },
+};
+const state = { status: 'all', label: '', device: '', before: null, photoUrls: [], page: 'reports', users: [], zones: [] };
 
 async function call(method, url, body) {
   const res = await fetch(url, {
@@ -237,12 +400,12 @@ async function call(method, url, body) {
   return data;
 }
 
+const quiet = (e) => { if (e.message !== 'Signed out') toast(e.message); };
+
 function show(which) {
   $('loading').hidden = which !== 'loading';
   $('login').hidden = which !== 'login';
-  $('dash').hidden = which !== 'dash';
-  $('logout').hidden = which !== 'dash';
-  $('tabs').hidden = which !== 'dash';
+  $('app').hidden = which !== 'app';
   if (which === 'login') setTimeout(() => $('password').focus(), 0);
 }
 
@@ -258,6 +421,7 @@ function toast(text) {
 function el(tag, attrs, children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === undefined || v === null) continue;
     if (k === 'class') e.className = v;
     else if (k === 'text') e.textContent = v;
     else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
@@ -268,9 +432,60 @@ function el(tag, attrs, children) {
 }
 
 const when = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const day = (iso) => new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' });
+const osm = (lat, lon, zoom) => 'https://www.openstreetmap.org/?mlat=' + lat + '&mlon=' + lon + '#map=' + zoom + '/' + lat + '/' + lon;
+const mapLink = (lat, lon, zoom, digits, extra) => el('a', { href: osm(lat, lon, zoom), target: '_blank', rel: 'noopener noreferrer',
+  title: 'Open on OpenStreetMap', text: lat.toFixed(digits) + ', ' + lon.toFixed(digits) + (extra || '') });
+const setCount = (page, n) => { $('n-' + page).textContent = n == null ? '' : String(n); };
 
+// ---- Navigation ----
+function openSide(open) {
+  $('side').classList.toggle('open', open);
+  $('scrim').hidden = !open;
+  $('menu').setAttribute('aria-expanded', String(open));
+}
+
+function route() {
+  const name = location.hash.slice(1);
+  const page = PAGES[name] ? name : 'reports';
+  state.page = page;
+  for (const a of document.querySelectorAll('.nav[data-page]')) {
+    const on = a.dataset.page === page;
+    a.classList.toggle('on', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+  for (const p of Object.keys(PAGES)) $('page-' + p).hidden = p !== page;
+  $('page-title').textContent = PAGES[page].title;
+  $('page-sub').textContent = PAGES[page].sub;
+  document.title = PAGES[page].title + ' · Firesight admin';
+  openSide(false);
+  load(page);
+}
+
+function go(page) {
+  if (location.hash === '#' + page) route(); else location.hash = page;
+}
+
+function load(page) {
+  if (page === 'reports') refreshReports();
+  if (page === 'alerts') loadAlerts();
+  if (page === 'users') loadUsers();
+  if (page === 'zones') loadZones();
+}
+
+/** Sidebar counts, fetched once after sign-in; each page updates its own count when it loads. */
+function loadCounts() {
+  call('GET', '/admin/api/stats').then((s) => setCount('reports', s.last24h || null)).catch(() => {});
+  call('GET', '/admin/api/broadcasts').then((d) => setCount('alerts', activeCount(d) || null)).catch(() => {});
+  call('GET', '/admin/api/users?q=').then((d) => setCount('users', d.total)).catch(() => {});
+  call('GET', '/admin/api/zones').then((d) => setCount('zones', d.zones.length)).catch(() => {});
+}
+const activeCount = (d) => d.broadcasts.filter((b) => !b.cancelled && b.expiresAt > d.now).length;
+
+// ---- Reports ----
 async function loadStats() {
   const s = await call('GET', '/admin/api/stats');
+  setCount('reports', s.last24h || null);
   const tiles = [
     [s.last24h, 'reports, last 24 h'],
     [s.last7d, 'reports, last 7 days'],
@@ -289,7 +504,6 @@ function renderItem(r) {
     : el('div', { class: 'thumb empty', text: 'No photo' });
   if (r.hasPhoto) loadThumb(thumb, r.id);
 
-  const map = 'https://www.openstreetmap.org/?mlat=' + r.lat + '&mlon=' + r.lon + '#map=13/' + r.lat + '/' + r.lon;
   const li = el('li', { class: 'card item' + (r.hidden ? ' is-hidden' : '') }, [
     thumb,
     el('div', { class: 'meta' }, [
@@ -300,15 +514,15 @@ function renderItem(r) {
       ]),
       el('p', { class: 'note' + (r.note ? '' : ' empty'), text: r.note || 'No note' }),
       el('div', { class: 'row' }, [
-        el('a', { href: map, target: '_blank', rel: 'noopener noreferrer', text: r.lat.toFixed(4) + ', ' + r.lon.toFixed(4) }),
+        mapLink(r.lat, r.lon, 13, 4),
         r.bearing != null ? el('span', { class: 'muted', text: 'pointing ' + Math.round(r.bearing) + '°' }) : null,
         r.hotspotSensor ? el('span', { class: 'muted', text: 'at hotspot ' + r.hotspotSensor }) : null,
         el('button', { class: 'linkish', title: 'Show only this phone', text: 'phone ' + r.device, onclick: () => filterDevice(r.device) }),
       ]),
       el('div', { class: 'actions' }, [
-        el('button', { text: r.hidden ? 'Show to phones' : 'Hide', onclick: (e) => setHidden(r, !r.hidden, e.target) }),
-        el('button', { class: 'danger', text: 'Delete', onclick: (e) => remove(r, e.target) }),
-        el('button', { text: 'Send zone alert here', onclick: () => alertAt(r) }),
+        el('button', { class: 'small', text: r.hidden ? 'Show to phones' : 'Hide', onclick: (e) => setHidden(r, !r.hidden, e.target) }),
+        el('button', { class: 'small danger', text: 'Delete', onclick: (e) => remove(r, e.target) }),
+        el('button', { class: 'small', text: 'Send zone alert here', onclick: () => alertAt({ lat: r.lat, lon: r.lon, title: (LABEL_NAMES[r.label] || 'Fire') + ' reported nearby' }) }),
       ]),
     ]),
   ]);
@@ -358,8 +572,8 @@ async function loadList(reset) {
   $('list-empty').hidden = $('list').children.length > 0;
 }
 
-async function refresh() {
-  try { await Promise.all([loadStats(), loadList(true)]); } catch (e) { if (e.message !== 'Signed out') toast(e.message); }
+async function refreshReports() {
+  try { await Promise.all([loadStats(), loadList(true)]); } catch (e) { quiet(e); }
 }
 
 function filterDevice(device) {
@@ -368,10 +582,10 @@ function filterDevice(device) {
   chip.replaceChildren(
     el('span', { text: 'Phone ' + device }),
     el('button', { class: 'linkish', text: 'Hide all its reports', onclick: () => hideDevice(device, true) }),
-    el('button', { 'aria-label': 'Clear phone filter', text: '✕', onclick: () => { state.device = ''; chip.hidden = true; refresh(); } }),
+    el('button', { 'aria-label': 'Clear phone filter', text: '✕', onclick: () => { state.device = ''; chip.hidden = true; refreshReports(); } }),
   );
   chip.hidden = false;
-  refresh();
+  go('reports');
 }
 
 async function setHidden(r, hidden, btn) {
@@ -389,7 +603,7 @@ async function hideDevice(device, hidden) {
   try {
     const { changed } = await call('POST', '/admin/api/devices/' + encodeURIComponent(device) + '/hidden', { hidden });
     toast(changed + ' report(s) hidden.');
-    refresh();
+    refreshReports();
   } catch (e) { toast(e.message); }
 }
 
@@ -405,31 +619,34 @@ async function remove(r, btn) {
   } catch (e) { btn.disabled = false; toast(e.message); }
 }
 
-// ---- Tabs ----
-function openTab(name) {
-  for (const b of document.querySelectorAll('.tab')) b.classList.toggle('on', b.dataset.tab === name);
-  for (const t of ['reports', 'alerts', 'users']) $('tab-' + t).hidden = t !== name;
-  if (name === 'alerts') loadAlerts();
-  if (name === 'users') loadUsers();
-}
-
 // ---- Zone alerts ----
 const LEVEL_NAMES = { danger: 'Danger', warning: 'Warning', info: 'Info' };
 
-function alertAt(r) {
-  $('a-lat').value = r.lat.toFixed(4);
-  $('a-lon').value = r.lon.toFixed(4);
-  if (!$('a-title').value) $('a-title').value = (LABEL_NAMES[r.label] || 'Fire') + ' reported nearby';
+/** Opens the alert form with the place filled in: from a report, or from someone's zone. */
+function alertAt(p) {
+  $('a-lat').value = p.lat.toFixed(4);
+  $('a-lon').value = p.lon.toFixed(4);
+  if (p.radiusKm) $('a-radius').value = String(Math.min(200, Math.max(0.5, p.radiusKm)));
+  if (p.title && !$('a-title').value) $('a-title').value = p.title;
+  const target = $('a-target');
+  if (p.zone) {
+    target.replaceChildren(
+      el('span', { class: 'ring' }),
+      el('span', { text: 'Targeting zone “' + p.zone + '”' + (p.owner ? ' of ' + p.owner : '') + ' · ' + p.radiusKm + ' km' }),
+      el('button', { type: 'button', 'aria-label': 'Clear', text: '✕', onclick: () => { target.hidden = true; } }),
+    );
+    target.hidden = false;
+  } else target.hidden = true;
   updateMapLink();
-  openTab('alerts');
-  $('a-message').focus();
+  go('alerts');
+  setTimeout(() => ($('a-title').value ? $('a-message') : $('a-title')).focus(), 0);
 }
 
 function updateMapLink() {
   const lat = Number($('a-lat').value), lon = Number($('a-lon').value);
   const ok = $('a-lat').value !== '' && $('a-lon').value !== '' && Number.isFinite(lat) && Number.isFinite(lon);
   $('a-map').hidden = !ok;
-  if (ok) $('a-map').href = 'https://www.openstreetmap.org/?mlat=' + lat + '&mlon=' + lon + '#map=11/' + lat + '/' + lon;
+  if (ok) $('a-map').href = osm(lat, lon, 11);
 }
 
 function renderAlert(b, now) {
@@ -444,27 +661,27 @@ function renderAlert(b, now) {
     el('p', { class: 'note', text: b.message }),
     b.titleAr || b.messageAr ? el('p', { class: 'note', dir: 'rtl', text: [b.titleAr, b.messageAr].filter(Boolean).join(' · ') }) : null,
     el('div', { class: 'row' }, [
-      el('a', { href: 'https://www.openstreetmap.org/?mlat=' + b.lat + '&mlon=' + b.lon + '#map=11/' + b.lat + '/' + b.lon,
-        target: '_blank', rel: 'noopener noreferrer', text: b.lat.toFixed(4) + ', ' + b.lon.toFixed(4) + ' · ' + b.radiusKm + ' km' }),
+      mapLink(b.lat, b.lon, 11, 4, ' · ' + b.radiusKm + ' km'),
       el('span', { class: 'muted', text: 'sent ' + when(b.createdAt) }),
       b.pushed ? el('span', { class: 'muted', text: 'pushed to ' + b.pushed.delivered + ' of ' + b.pushed.recipients + ' phone(s)' }) : null,
-      over ? null : el('button', { class: 'danger', text: 'Cancel', onclick: (e) => cancelAlert(b, e.target) }),
+      over ? null : el('button', { class: 'small danger', text: 'Cancel', onclick: (e) => cancelAlert(b, e.target) }),
     ]),
   ]);
 }
 
 async function loadAlerts() {
   try {
-    const { broadcasts, now, phones, push } = await call('GET', '/admin/api/broadcasts');
-    const line = $('a-phones');
-    line.replaceChildren(
+    const data = await call('GET', '/admin/api/broadcasts');
+    const { broadcasts, now, phones, push } = data;
+    setCount('alerts', activeCount(data) || null);
+    $('a-phones').replaceChildren(
       push ? el('span', { text: 'Push is on. ' }) : el('span', { class: 'off', text: 'Push is off (FIREBASE_SERVICE_ACCOUNT not set). ' }),
       phones ? el('span', { class: 'muted', text: phones.withPush + ' phone(s) can receive push · ' + phones.zones + ' zone(s) on ' +
         phones.withZones + ' phone(s) · ' + phones.withLocation + ' with a last location' }) : null,
     );
     $('alerts').replaceChildren(...broadcasts.map((b) => renderAlert(b, now)));
     $('alerts-empty').hidden = broadcasts.length > 0;
-  } catch (e) { if (e.message !== 'Signed out') toast(e.message); }
+  } catch (e) { quiet(e); }
 }
 
 async function sendAlert(e) {
@@ -482,6 +699,7 @@ async function sendAlert(e) {
   try {
     const { broadcast } = await call('POST', '/admin/api/broadcasts', body);
     for (const id of ['a-title', 'a-title-ar', 'a-message', 'a-message-ar']) $(id).value = '';
+    $('a-target').hidden = true;
     toast(broadcast.pushed ? 'Alert sent. Pushed to ' + broadcast.pushed.delivered + ' of ' + broadcast.pushed.recipients + ' phone(s).' : 'Alert sent. Phones pick it up at their next check.');
     loadAlerts();
   } catch (err) { $('a-error').textContent = err.message; }
@@ -496,34 +714,68 @@ async function cancelAlert(b, btn) {
 }
 
 // ---- Users ----
+function zoneRow(z, owner) {
+  return el('li', { class: 'zone' }, [
+    el('span', { class: 'ring' }),
+    el('b', { text: z.name || 'Unnamed zone' }),
+    mapLink(z.lat, z.lon, 11, 3),
+    el('span', { class: 'muted num', text: z.radiusKm + ' km' }),
+    z.createdAt ? el('span', { class: 'muted', text: 'added ' + day(z.createdAt) }) : null,
+    el('button', { class: 'small', text: 'Alert this zone', onclick: () => alertAt({ lat: z.lat, lon: z.lon, radiusKm: z.radiusKm, zone: z.name, owner }) }),
+  ]);
+}
+
 function renderUser(u) {
   const pro = u.plan === 'pro';
   const ph = u.phone;
   const loc = ph && ph.lastLocation;
+  const zones = u.zones || [];
+  const initial = (u.name || u.email || '?').trim().charAt(0).toUpperCase();
   return el('li', { class: 'card user-item' }, [
-    el('div', { class: 'row' }, [
-      el('b', { text: u.email }),
-      u.name ? el('span', { class: 'muted', text: u.name }) : null,
+    el('div', { class: 'user-head' }, [
+      el('div', { class: 'avatar', text: initial, 'aria-hidden': 'true' }),
+      el('div', { class: 'who' }, [
+        el('b', { text: u.email }),
+        el('span', { class: 'muted', text: (u.name ? u.name + ' · ' : '') + 'joined ' + day(u.createdAt) }),
+      ]),
       el('span', { class: 'badge ' + (pro ? 'pro' : ''), text: pro ? 'Pro' : 'Free' }),
-      el('span', { class: 'muted', text: 'joined ' + when(u.createdAt) }),
-      el('button', { text: pro ? 'Set to Free' : 'Give Pro', onclick: (e) => setPlan(u, pro ? 'free' : 'pro', e.target) }),
+      el('button', { class: 'small', text: pro ? 'Set to Free' : 'Give Pro', onclick: (e) => setPlan(u, pro ? 'free' : 'pro', e.target) }),
     ]),
-    el('div', { class: 'row' }, ph ? [
-      loc ? el('a', { href: 'https://www.openstreetmap.org/?mlat=' + loc.lat + '&mlon=' + loc.lon + '#map=12/' + loc.lat + '/' + loc.lon,
-        target: '_blank', rel: 'noopener noreferrer', text: 'last location ' + loc.lat.toFixed(3) + ', ' + loc.lon.toFixed(3) + ' (' + when(loc.at) + ')' })
-        : el('span', { class: 'muted', text: 'no location shared' }),
-      el('span', { class: 'muted', text: ph.zones + ' zone(s) · push ' + (ph.push ? 'on' : 'off') + ' · seen ' + when(ph.seenAt) }),
-    ] : [el('span', { class: 'muted', text: 'Instant alerts not turned on' })]),
+    el('div', { class: 'facts' }, ph ? [
+      loc ? el('span', null, [document.createTextNode('Last location '), mapLink(loc.lat, loc.lon, 12, 3, ' (' + when(loc.at) + ')')])
+        : el('span', { text: 'No location shared' }),
+      el('span', { text: 'Push ' + (ph.push ? 'on' : 'off') }),
+      el('span', { text: 'Phone seen ' + when(ph.seenAt) }),
+    ] : [el('span', { text: 'Instant alerts not turned on' })]),
+    zones.length
+      ? el('details', { class: 'zones', open: '' }, [
+          el('summary', null, [
+            document.createTextNode('Alert zones (' + zones.length + ')'),
+            u.zonesSaved ? null : el('span', { class: 'muted', text: ' · from their phone' }),
+          ]),
+          el('ul', { class: 'zone-list' }, zones.map((z) => zoneRow(z, u.email))),
+        ])
+      : el('div', { class: 'facts' }, [el('span', { text: 'No alert zones' })]),
   ]);
+}
+
+function renderUsers() {
+  const f = $('u-filter').value;
+  const shown = state.users.filter((u) => !f || (f === 'zones' ? (u.zones || []).length > 0 : u.plan === 'pro'));
+  $('users').replaceChildren(...shown.map(renderUser));
+  $('users-empty').hidden = shown.length > 0;
+  return shown.length;
 }
 
 let userTimer;
 async function loadUsers() {
   try {
     const { users, total } = await call('GET', '/admin/api/users?q=' + encodeURIComponent($('u-q').value));
-    $('users').replaceChildren(...users.map(renderUser));
-    $('u-total').textContent = total + ' account(s)' + (total > users.length ? ', showing ' + users.length : '');
-  } catch (e) { if (e.message !== 'Signed out') toast(e.message); }
+    state.users = users;
+    const shown = renderUsers();
+    if (!$('u-q').value) setCount('users', total);
+    $('u-total').textContent = total + ' account(s)' + (total > users.length || shown < users.length ? ', showing ' + shown : '');
+  } catch (e) { quiet(e); }
 }
 
 async function setPlan(u, plan, btn) {
@@ -535,6 +787,67 @@ async function setPlan(u, plan, btn) {
   } catch (e) { btn.disabled = false; toast(e.message); }
 }
 
+function showUser(email) {
+  $('u-q').value = email;
+  $('u-filter').value = '';
+  go('users');
+}
+
+// ---- Zones ----
+function ownerCell(z) {
+  const o = z.owner;
+  if (o.kind === 'guest') {
+    return el('div', { class: 'owner' }, [
+      el('span', { class: 'muted', text: 'Guest phone' }),
+      el('button', { class: 'linkish', title: 'Reports from this phone', text: o.device, onclick: () => filterDevice(o.device) }),
+    ]);
+  }
+  if (!o.email) return el('div', { class: 'owner' }, [el('span', { class: 'muted', text: 'Deleted account' })]);
+  return el('div', { class: 'owner' }, [
+    el('button', { class: 'linkish', title: 'Open this user', text: o.email, onclick: () => showUser(o.email) }),
+    el('span', { class: 'muted', text: (o.plan === 'pro' ? 'Pro' : 'Free') + (z.source === 'phone' ? ' · from their phone' : '') }),
+  ]);
+}
+
+function renderZones() {
+  const q = $('z-q').value.trim().toLowerCase();
+  const kind = $('z-owner').value;
+  const shown = state.zones.filter((z) => (!kind || z.owner.kind === kind) &&
+    (!q || (z.name || '').toLowerCase().includes(q) || (z.owner.email || '').toLowerCase().includes(q)));
+  $('zones').replaceChildren(...shown.map((z) => el('tr', null, [
+    el('td', { 'data-label': 'Zone' }, [el('span', { class: 'zname' }, [el('span', { class: 'ring' }), el('span', { text: z.name || 'Unnamed zone' })])]),
+    el('td', { 'data-label': 'Owner' }, [ownerCell(z)]),
+    el('td', { 'data-label': 'Center', class: 'num' }, [mapLink(z.lat, z.lon, 11, 3)]),
+    el('td', { 'data-label': 'Radius', class: 'num', text: z.radiusKm + ' km' }),
+    el('td', { 'data-label': 'Updated', class: 'muted', text: day(z.createdAt || z.updatedAt) }),
+    el('td', null, [el('button', { class: 'small', text: 'Alert this zone',
+      onclick: () => alertAt({ lat: z.lat, lon: z.lon, radiusKm: z.radiusKm, zone: z.name, owner: z.owner.email || (z.owner.kind === 'guest' ? 'a guest phone' : '') }) })]),
+  ])));
+  $('zones-wrap').hidden = shown.length === 0;
+  $('zones-empty').hidden = shown.length > 0;
+  $('z-total').textContent = shown.length === state.zones.length ? state.zones.length + ' zone(s)' : shown.length + ' of ' + state.zones.length + ' zone(s)';
+}
+
+async function loadZones() {
+  try {
+    const { zones, phones } = await call('GET', '/admin/api/zones');
+    state.zones = zones;
+    setCount('zones', zones.length);
+    const owners = new Set(zones.map((z) => z.owner.kind === 'user' ? 'u:' + z.owner.email : 'g:' + z.owner.device));
+    const tiles = [
+      [zones.length, 'alert zones'],
+      [zones.filter((z) => z.owner.kind === 'user').length, 'on accounts'],
+      [zones.filter((z) => z.owner.kind === 'guest').length, 'on guest phones'],
+      [owners.size, 'people watching'],
+      [phones.withPush, 'phones with push'],
+    ];
+    $('z-stats').replaceChildren(...tiles.map(([n, label]) =>
+      el('div', { class: 'card stat' }, [el('b', { text: String(n) }), el('span', { text: label })])));
+    renderZones();
+  } catch (e) { quiet(e); }
+}
+
+// ---- Start ----
 async function start() {
   let session;
   try { session = await call('GET', '/admin/api/session'); } catch (e) { toast(e.message); return; }
@@ -545,7 +858,13 @@ async function start() {
     show('login');
     return;
   }
-  if (session.signedIn) { show('dash'); refresh(); } else show('login');
+  if (session.signedIn) enter(); else show('login');
+}
+
+function enter() {
+  show('app');
+  route();
+  loadCounts();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -556,8 +875,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       await call('POST', '/admin/login', { password: $('password').value });
       $('password').value = '';
-      show('dash');
-      refresh();
+      enter();
     } catch (err) {
       $('login-error').textContent = err.message;
     } finally {
@@ -568,15 +886,21 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await call('POST', '/admin/logout'); } catch {}
     show('login');
   });
-  $('f-status').addEventListener('change', (e) => { state.status = e.target.value; refresh(); });
-  $('f-label').addEventListener('change', (e) => { state.label = e.target.value; refresh(); });
-  $('refresh').addEventListener('click', refresh);
-  $('more').addEventListener('click', () => loadList(false).catch((e) => toast(e.message)));
-  for (const b of document.querySelectorAll('.tab')) b.addEventListener('click', () => openTab(b.dataset.tab));
+  window.addEventListener('hashchange', route);
+  $('menu').addEventListener('click', () => openSide(!$('side').classList.contains('open')));
+  $('scrim').addEventListener('click', () => openSide(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') openSide(false); });
+  $('reload').addEventListener('click', () => load(state.page));
+  $('f-status').addEventListener('change', (e) => { state.status = e.target.value; refreshReports(); });
+  $('f-label').addEventListener('change', (e) => { state.label = e.target.value; refreshReports(); });
+  $('more').addEventListener('click', () => loadList(false).catch(quiet));
   $('alert-form').addEventListener('submit', sendAlert);
   $('a-lat').addEventListener('input', updateMapLink);
   $('a-lon').addEventListener('input', updateMapLink);
   $('u-q').addEventListener('input', () => { clearTimeout(userTimer); userTimer = setTimeout(loadUsers, 250); });
+  $('u-filter').addEventListener('change', loadUsers);
+  $('z-q').addEventListener('input', renderZones);
+  $('z-owner').addEventListener('change', renderZones);
   updateMapLink();
   start();
 });

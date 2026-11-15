@@ -96,6 +96,17 @@ export interface DeviceStats {
   withLocation: number;
 }
 
+/** The zones of one account, or of one phone used without an account. */
+export interface ZoneGroup {
+  userId: string | null;
+  /** Set for guest phones (no account). */
+  installationId: string | null;
+  /** 'account': saved to the account. 'phone': read from a phone. */
+  source: 'account' | 'phone';
+  zones: AccountZone[];
+  updatedAt: string;
+}
+
 export interface DeviceStore {
   upsert(d: DeviceInput): Device;
   remove(installationId: string): boolean;
@@ -115,6 +126,11 @@ export interface DeviceStore {
   setAccountZones(userId: string, zones: AccountZone[]): { zones: AccountZone[]; updatedAt: string };
   /** Account deleted: forgets its saved zones. */
   removeAccountZones(userId: string): void;
+  /**
+   * Every zone, grouped by owner, for the admin Zones page: zones saved to an
+   * account (or, until saved, its newest phone's), then guest phones' zones.
+   */
+  allZones(): ZoneGroup[];
   stats(): DeviceStats;
   prune(): number;
   close(): void;
@@ -224,6 +240,30 @@ export function createDeviceStore(dir: string, { now = Date.now }: { now?: () =>
 
     removeAccountZones(userId) {
       db.prepare('DELETE FROM account_zones WHERE user_id = ?').run(userId);
+    },
+
+    allZones() {
+      const out: ZoneGroup[] = [];
+      const saved = new Set<string>();
+      for (const r of db.prepare('SELECT * FROM account_zones ORDER BY updated_at DESC').all() as unknown as
+        { user_id: string; zones: string; updated_at: string }[]) {
+        saved.add(r.user_id);
+        const zones = JSON.parse(r.zones) as AccountZone[];
+        if (zones.length) out.push({ userId: r.user_id, installationId: null, source: 'account', zones, updatedAt: r.updated_at });
+      }
+      const fromPhone = new Set<string>();
+      for (const r of db.prepare(`SELECT * FROM devices WHERE zones != '[]' ORDER BY updated_at DESC`).all() as unknown as Row[]) {
+        if (r.user_id) {
+          // Same fallback as accountZones: the user's newest phone, until the app saves to the account.
+          if (saved.has(r.user_id) || fromPhone.has(r.user_id)) continue;
+          fromPhone.add(r.user_id);
+        }
+        out.push({
+          userId: r.user_id, installationId: r.user_id ? null : r.installation_id, source: 'phone',
+          zones: JSON.parse(r.zones) as AccountZone[], updatedAt: r.updated_at,
+        });
+      }
+      return out;
     },
 
     stats() {

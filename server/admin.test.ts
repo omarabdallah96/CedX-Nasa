@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { Service } from '../src/lib/service.ts';
 import { createApp } from './app.ts';
 import { createReportStore, type NewReport } from './reports.ts';
+import { createAccountStore } from './accounts.ts';
+import { createDeviceStore } from './devices.ts';
 
 const PASSWORD = 'correct horse battery staple';
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1, 0xff, 0xd9]);
@@ -128,6 +130,29 @@ describe('admin', () => {
     expect((await app.request(`/admin/api/reports/${ids[1]}`, { method: 'DELETE', ...as(cookie) })).status).toBe(200);
     expect((await app.request(`/admin/api/reports/${ids[1]}`, { method: 'DELETE', ...as(cookie) })).status).toBe(404);
     expect((await (await app.request('/admin/api/stats', as(cookie))).json()).total).toBe(2);
+  });
+
+  it('shows each user\'s zones, and every zone with its owner', async () => {
+    const accounts = createAccountStore(':memory:');
+    const devices = createDeviceStore(':memory:');
+    const app = createApp({ service: noService, dataDir: '.', accounts, devices, adminPassword: PASSWORD, authPer15Min: 100 });
+    const { user } = await accounts.register({ email: 'zoe@example.com', password: 'long enough pw', name: 'Zoe' });
+    const akkar = { id: 'z1', name: 'Akkar', lat: 34.45, lon: 36.24, radiusKm: 10, createdAt: '2026-11-15T11:00:00.000Z' };
+    devices.setAccountZones(user.id, [akkar]);
+    const guest = { id: 'g1', name: 'Home', lat: 33.9, lon: 35.5, radiusKm: 5 };
+    devices.upsert({ installationId: 'guest-phone', token: null, platform: 'android', lang: 'en', userId: null, location: null, zones: [guest] });
+    const { cookie } = await login(app);
+
+    const users = await (await app.request('/admin/api/users?q=zoe', as(cookie))).json();
+    expect(users.users[0]).toMatchObject({ email: 'zoe@example.com', zones: [akkar], zonesSaved: true });
+
+    const all = await (await app.request('/admin/api/zones', as(cookie))).json();
+    expect(all.zones).toHaveLength(2);
+    expect(all.zones[0]).toMatchObject({ name: 'Akkar', source: 'account', owner: { kind: 'user', email: 'zoe@example.com', plan: 'free' } });
+    expect(all.zones[1]).toMatchObject({ name: 'Home', source: 'phone', owner: { kind: 'guest' } });
+    expect(all.zones[1].owner.device).toMatch(/^[0-9a-f]{10}$/);
+    expect(JSON.stringify(all)).not.toContain('guest-phone');
+    expect((await app.request('/admin/api/zones')).status).toBe(401);
   });
 
   it('signs out', async () => {

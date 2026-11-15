@@ -95,6 +95,8 @@ export interface AccountStore {
   updateName(userId: string, name: string): User | null;
   /** Newest first; `query` matches part of the email. For the admin page. */
   search(query: string, limit: number): { users: User[]; total: number };
+  /** Looks up several accounts at once; unknown ids are left out. */
+  byIds(ids: string[]): Map<string, User>;
   /** Sets the plan by email (admin, or a payment webhook later). Null when there is no such account. */
   setPlan(email: string, plan: Plan): User | null;
   /** Deletes the account and every session of it. */
@@ -196,6 +198,18 @@ export function createAccountStore(dir: string, { now = Date.now }: { now?: () =
       const rows = db.prepare(`SELECT * FROM users WHERE email LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`).all(like, limit);
       const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM users WHERE email LIKE ? ESCAPE '\\'`).get(like) as { n: number }).n);
       return { users: (rows as unknown as UserRow[]).map(toUser), total };
+    },
+
+    byIds(ids) {
+      const out = new Map<string, User>();
+      const unique = [...new Set(ids)];
+      // SQLite allows a limited number of parameters per statement.
+      for (let i = 0; i < unique.length; i += 500) {
+        const chunk = unique.slice(i, i + 500);
+        const rows = db.prepare(`SELECT * FROM users WHERE id IN (${chunk.map(() => '?').join(',')})`).all(...chunk);
+        for (const r of rows as unknown as UserRow[]) out.set(r.id, toUser(r));
+      }
+      return out;
     },
 
     setPlan(email, plan) {

@@ -11,7 +11,7 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from './admin-page.ts';
 import { createRateLimit } from './ratelimit.ts';
-import { LABELS, type ReportStore } from './reports.ts';
+import { deviceTag, LABELS, type ReportStore } from './reports.ts';
 import { normalizeEmail, PLANS, type AccountStore, type Plan } from './accounts.ts';
 import type { DeviceStore } from './devices.ts';
 import type { Push } from './push.ts';
@@ -89,7 +89,7 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, devi
     signedIn: signedIn(c),
     labels: LABELS,
     levels: BROADCAST_LEVELS,
-    features: { accounts: !!accounts, broadcasts: !!broadcasts, push: !!push?.available },
+    features: { reports: !!reports, accounts: !!accounts, broadcasts: !!broadcasts, zones: !!devices, push: !!push?.available },
   }));
 
   // State-changing requests must say they come from the page.
@@ -203,12 +203,33 @@ export function createAdmin({ password = '', reports, accounts, broadcasts, devi
       total: found.total,
       users: found.users.map((u) => {
         const d = phones.get(u.id);
+        // The zones saved to the account (or, until the app saves them, its newest phone's).
+        const z = devices?.accountZones(u.id) ?? { zones: [], updatedAt: null };
         return {
           ...u,
+          zones: z.zones,
+          zonesSaved: z.updatedAt !== null,
           phone: d ? { lastLocation: d.location, zones: d.zones.length, push: d.token !== null, seenAt: d.updatedAt } : null,
         };
       }),
     });
+  });
+
+  // ---- Zones: every alert zone, with who it belongs to ----
+  app.get('/admin/api/zones', (c) => {
+    if (!devices) return fail(c, 503, 'devices_unavailable', 'Instant alerts are not enabled on this server.');
+    const groups = devices.allZones();
+    const users = accounts?.byIds(groups.flatMap((g) => (g.userId ? [g.userId] : []))) ?? new Map();
+    const zones = groups.flatMap((g) => {
+      const u = g.userId ? users.get(g.userId) : undefined;
+      const owner = u
+        ? { kind: 'user' as const, email: u.email, name: u.name, plan: u.plan }
+        : g.userId
+          ? { kind: 'user' as const, email: null, name: '', plan: 'free' as const }
+          : { kind: 'guest' as const, device: deviceTag(g.installationId!) };
+      return g.zones.map((z) => ({ ...z, owner, source: g.source, updatedAt: g.updatedAt }));
+    });
+    return c.json({ zones, phones: devices.stats() });
   });
 
   app.post('/admin/api/users/plan', async (c) => {
