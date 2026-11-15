@@ -226,21 +226,21 @@ const WATER_DETAIL: Record<string, string> = {
 /**
  * Civil defence and Red Cross centres carry no tag of their own in OpenStreetMap
  * (they are fire stations, ambulance stations, clinics, offices…), so they are
- * recognised by name or operator. Kept as strings: Overpass gets the same ones.
+ * recognised by name or operator. Searching names inside Overpass is too slow
+ * on the public servers, so the query asks for the kinds of place they can be
+ * (by tag, which is indexed) and the names are checked here.
  */
 const CIVIL_DEFENSE = 'civil defen[cs]e|d[eé]fen[cs]e civile?|civil protection|protec?ção civil|الدفاع المدني|دفاع مدني|πολιτική προστασία|πολιτική άμυνα';
 const RED_CROSS = 'red cross|croix.rouge|red crescent|cruz vermelha|الصليب ال[أا]حمر|الهلال ال[أا]حمر|ερυθρός σταυρός';
 const CIVIL_DEFENSE_RE = new RegExp(CIVIL_DEFENSE, 'i');
 const RED_CROSS_RE = new RegExp(RED_CROSS, 'i');
 
-/** Named or operated by civil defence or the Red Cross; streets named after them are left out. */
-function helpByName(at: string): string {
-  const both = `${CIVIL_DEFENSE}|${RED_CROSS}`;
-  return `  nwr["name"~"${both}",i]["highway"!~"."]${at};
-  nwr["name:en"~"${both}",i]["highway"!~"."]${at};
-  nwr["operator"~"${both}",i]["highway"!~"."]${at};
-  nwr["amenity"="civil_defence"]${at};
-  nwr["emergency"~"^(ambulance_station|disaster_response)$"]${at};`;
+/** Places that can be a civil defence or Red Cross centre; classify() keeps the ones that are. */
+function helpCandidates(at: string): string {
+  return `  nwr["amenity"="civil_defence"]${at};
+  nwr["emergency"~"^(ambulance_station|disaster_response)$"]${at};
+  nwr["office"~"^(ngo|association|charity|government)$"]${at};
+  nwr["healthcare"~"^(centre|yes)$"]${at};`;
 }
 
 /** Only the places people go to for help: a light query that can reach far. */
@@ -248,8 +248,8 @@ export function helpQuery(c: LatLon, radiusKm: number): string {
   const at = `(around:${Math.round(radiusKm * 1000)},${c.lat},${c.lon})`;
   return `[out:json][timeout:25];
 (
-${helpByName(at)}
-  nwr["amenity"~"^(fire_station|hospital)$"]${at};
+${helpCandidates(at)}
+  nwr["amenity"~"^(fire_station|hospital|clinic)$"]${at};
 );
 out center tags;`;
 }
@@ -266,7 +266,7 @@ export function overpassQuery(c: LatLon, radiusKm: number): string {
   nwr["natural"="water"]["water"!~"wastewater|sewage"]${at};
   nwr["landuse"="reservoir"]${at};
   nwr["amenity"="fire_station"]${at};
-${helpByName(at)}
+${helpCandidates(at)}
   nwr["amenity"~"^(hospital|clinic)$"]${at};
   nwr["emergency"="assembly_point"]${at};
   node["place"~"^(city|town|village)$"]${at};
@@ -478,6 +478,9 @@ export function createSafety({ fetchJson = defaultFetchJson, cacheDir, orsKey = 
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             timeoutMs: OVERPASS_TIMEOUT_MS,
           });
+          // A query that ran out of time answers 200 with no elements and a remark.
+          const remark = (json as { remark?: string })?.remark;
+          if (remark && /error|timed out/i.test(remark)) throw new Error(`Overpass: ${remark}`);
           const found = parseOverpass(json, q, radiusKm, help ? 60 : null);
           if (file) await save(file, found).catch((err) => console.error('safety: could not save places', err));
           return found;

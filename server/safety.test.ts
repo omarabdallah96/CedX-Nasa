@@ -106,7 +106,7 @@ describe('civil defence and Red Cross', () => {
       { type: 'node', id: 6, lat: 33.91, lon: 35.9, tags: { office: 'ngo', operator: 'الصليب الأحمر اللبناني' } },
       { type: 'node', id: 7, lat: 33.92, lon: 35.9, tags: { amenity: 'hospital', name: 'Saint George' } },
       { type: 'node', id: 8, lat: 33.93, lon: 35.9, tags: { amenity: 'clinic', name: 'Clinic' } },
-      { type: 'node', id: 9, lat: 34.2, lon: 35.9, tags: { name: 'Civil Defence Deir al Kamar' } },
+      { type: 'node', id: 9, lat: 34.2, lon: 35.9, tags: { office: 'government', name: 'Civil Defence Deir al Kamar' } },
     ],
   };
 
@@ -121,8 +121,10 @@ describe('civil defence and Red Cross', () => {
       ['node/7', 'hospital', 'hospital'],
       ['node/8', 'hospital', 'clinic'],
     ]);
-    expect(overpassQuery(FIRE, 10)).toContain('الدفاع المدني');
+    expect(overpassQuery(FIRE, 10)).toContain('ambulance_station');
     expect(helpQuery(FIRE, 60)).not.toContain('waterway');
+    // Names are checked here, never searched for inside Overpass (too slow there).
+    expect(helpQuery(FIRE, 60)).not.toContain('"name"');
   });
 
   it('finds the nearest help far beyond the resource radius', async () => {
@@ -148,6 +150,16 @@ describe('civil defence and Red Cross', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).resources[0]).toMatchObject({ kind: 'civil_defense', bearingDeg: 0 });
     expect((await app.request('/api/v1/help?lat=1')).status).toBe(400);
+  });
+
+  it('does not keep an answer from a query that ran out of time', async () => {
+    let n = 0;
+    const safety = createSafety({
+      orsKey: '',
+      fetchJson: async () => (++n <= 2 ? { elements: [], remark: 'runtime error: Query timed out in "query" at line 1 after 26 seconds.' } : json),
+    });
+    await expect(safety.help(FIRE)).rejects.toThrow(/Overpass/);
+    expect((await safety.help(FIRE)).length).toBe(7);
   });
 });
 
