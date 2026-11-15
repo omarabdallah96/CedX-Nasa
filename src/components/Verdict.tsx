@@ -64,7 +64,8 @@ export function Verdict({ analysis, cal, sel, onSelect, place }: Props) {
   const is = (a: Selection) => a.year === sel.year && a.month === sel.month;
 
   return (
-    <section className="verdict" aria-labelledby="verdict-q">
+    <section className="verdict" aria-labelledby="verdict-h">
+      <h2 id="verdict-h" className="side-h">{t.verdict.heading}</h2>
       <div className="verdict-pick">
         <button type="button" className="icon-btn" onClick={() => go(index - 1)} disabled={index <= minIndex} aria-label={t.verdict.prevMonth}>‹</button>
         <label className="sr-only" htmlFor="pick-month">{t.verdict.month}</label>
@@ -78,10 +79,10 @@ export function Verdict({ analysis, cal, sel, onSelect, place }: Props) {
         <button type="button" className="icon-btn" onClick={() => go(index + 1)} disabled={index >= maxIndex} aria-label={t.verdict.nextMonth}>›</button>
       </div>
 
-      <p id="verdict-q" className="eyebrow">{t.verdict.question(monthName, sel.year, !!partial, place)}</p>
+      <p className="eyebrow">{t.verdict.question(monthName, sel.year, !!partial, place)}</p>
       {v && wording ? (
         <>
-          <h2 className="verdict-answer" data-level={v.level}>{t.answer[v.level]}</h2>
+          <h3 className="verdict-answer" data-level={v.level}>{t.answer[v.level]}</h3>
           <p className="verdict-badge" data-level={v.level}>
             <span aria-hidden="true">{ICON[v.level]}</span> {t.verdict.badge(v, wording.usual)}
           </p>
@@ -103,11 +104,20 @@ export function Verdict({ analysis, cal, sel, onSelect, place }: Props) {
               <small>{t.verdict.rankNote}</small>
             </div>
           </dl>
-          <p className="verdict-foot">
-            <span className="src-dot" data-src={source.key} aria-hidden="true" />
-            {t.verdict.source(source.text)}
-            {y && t.verdict.wholeYear(sel.year, y.ratio, y.rank, y.nYears)}
-          </p>
+          <dl className="facts">
+            <dt>{t.facts.satellite}</dt>
+            <dd><span className="src-dot" data-src={source.key} aria-hidden="true" />{source.text}</dd>
+            {y && (
+              <>
+                <dt>{t.verdict.allOf(sel.year)}</dt>
+                <dd>{t.verdict.wholeYear(y.ratio, y.rank, y.nYears)}</dd>
+              </>
+            )}
+            <dt>{t.facts.upTo}</dt>
+            <dd>{t.longDate(cal.nDays - 1)}</dd>
+            <dt>{t.facts.cellDay}</dt>
+            <dd>{t.facts.cellDayText}</dd>
+          </dl>
         </>
       ) : (
         <p className="verdict-text">{t.verdict.noCoverage}</p>
@@ -118,7 +128,6 @@ export function Verdict({ analysis, cal, sel, onSelect, place }: Props) {
         <button type="button" aria-pressed={is(sc.mostActive)} onClick={() => onSelect(sc.mostActive)}>{t.verdict.mostActive}</button>
         <button type="button" aria-pressed={is(sc.latest)} onClick={() => onSelect(sc.latest)}>{t.verdict.latest}</button>
       </div>
-      <p className="note">{t.verdict.note(t.longDate(cal.nDays - 1))}</p>
     </section>
   );
 }

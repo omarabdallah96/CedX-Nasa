@@ -90,7 +90,17 @@ strong { font-weight: 600; color: var(--ink); }
   text-transform: uppercase;
   color: var(--ink-3);
 }
-.note { font-size: 13px; line-height: 1.5; color: var(--ink-3); }
+.note { font-size: 14px; line-height: 1.55; color: var(--ink-3); }
+/* Side panel: one header per block, small sub-headers inside, label/value rows for facts. */
+.side-h { font: 600 15px/1.3 var(--sans); color: var(--ink); }
+.side-sub { margin-top: 4px; font: 600 13px/1.3 var(--sans); color: var(--ink-2); }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; font-size: 14px; line-height: 1.55; }
+.facts dt { color: var(--ink-3); }
+.facts dd { color: var(--ink-2); }
+@media (max-width: 480px) {
+  .facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .facts dd + dt { margin-top: 8px; }
+}
 .lede { max-width: 68ch; color: var(--ink-2); }
 .boot, .fatal { padding: 20vh var(--gutter); text-align: center; color: var(--ink-2); }
 .fatal h1 { font: 500 32px var(--display); margin-bottom: 12px; color: var(--ink); }
@@ -386,17 +396,16 @@ input[type='checkbox']:checked {
 .verdict-badge[data-level='far-above'] { color: var(--serious); }
 .verdict-badge[data-level='above'] { color: var(--warning); }
 .verdict-text { max-width: 52ch; font-size: 17px; color: var(--ink-2); }
-.verdict-foot { font-size: 13px; color: var(--ink-3); }
 .src-dot { display: inline-block; width: 8px; height: 8px; margin-inline-end: 6px; border-radius: 50%; background: var(--viirs); }
 .src-dot[data-src='modis'] { background: var(--modis); }
 
 .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border-block: 1px solid var(--hairline); }
 .tiles > div { padding-block: 12px; padding-inline: 0 14px; display: grid; gap: 2px; align-content: start; }
 .tiles > div + div { padding-inline-start: 14px; border-inline-start: 1px solid var(--hairline); }
-.tiles dt { font-size: 12px; color: var(--ink-3); }
+.tiles dt { font-size: 13px; color: var(--ink-3); }
 .tiles dd { font: 500 clamp(22px, 2.6vw, 30px)/1.1 var(--sans); letter-spacing: -0.01em; }
 .tiles .of { font-size: 0.55em; font-weight: 400; color: var(--ink-3); }
-.tiles small { font-size: 12px; color: var(--ink-3); }
+.tiles small { font-size: 13px; color: var(--ink-3); }
 .tiles-wide { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -409,7 +418,6 @@ input[type='checkbox']:checked {
 .chips button[aria-pressed='true'] { border-color: var(--accent); color: var(--accent-ink); }
 
 .area { display: grid; gap: 10px; padding-top: 18px; border-top: 1px solid var(--hairline); }
-.area h2 { font: 600 14px var(--sans); }
 .area-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .area-inputs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 8px; align-items: end; }
 .area-inputs label { display: grid; gap: 4px; font-size: 12px; font-weight: 500; color: var(--ink-2); }
@@ -581,7 +589,7 @@ td.cal-total { position: relative; white-space: nowrap; }
 /* ---------- Last 7 days, period, records, downloads ---------- */
 .now { display: grid; gap: 8px; padding-top: 18px; border-top: 1px solid var(--hairline); justify-items: start; }
 .now-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; width: 100%; }
-.now h2 { font: 600 14px var(--sans); }
+.now h2 { margin: 0; }
 .now h2 small { margin-inline-start: 6px; font: 400 13px var(--mono); color: var(--ink-3); }
 .now-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); }
 .now-live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
@@ -593,11 +601,11 @@ td.cal-total { position: relative; white-space: nowrap; }
 .now .btn { min-height: 36px; padding: 6px 14px; font-size: 13px; }
 
 .period { display: grid; gap: 10px; margin: 6px 0 0; padding: 14px 0 0; border: 0; border-top: 1px solid var(--hairline); min-width: 0; }
-.period legend { float: inline-start; width: 100%; padding: 0; font: 600 14px var(--sans); }
+.period legend { float: inline-start; width: 100%; padding: 0; }
 .period-inputs { clear: both; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .period-inputs label { display: grid; gap: 4px; font-size: 12px; font-weight: 500; color: var(--ink-2); }
 .period-inputs input { width: 100%; min-width: 0; font: 400 15px var(--mono); font-variant-numeric: tabular-nums; }
-.period-sum { font-size: 13px; line-height: 1.5; color: var(--ink-3); }
+.period-sum { display: grid; gap: 8px; font-size: 14px; line-height: 1.55; color: var(--ink-3); }
 .period-sum strong { font-weight: 600; color: var(--ink); }
 
 .records { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px clamp(16px, 3vw, 40px); padding-top: 8px; }
@@ -641,7 +649,7 @@ td.cal-total { position: relative; white-space: nowrap; }
 /* Taller letterforms and marks above and below the line need more leading than Latin. */
 body:lang(ar) { line-height: 1.7; }
 .eyebrow:lang(ar) { font-size: 13px; line-height: 1.5; }
-.note:lang(ar), .period-sum:lang(ar), .verdict-foot:lang(ar) { line-height: 1.7; }
+.note:lang(ar), .period-sum:lang(ar), .facts:lang(ar) { line-height: 1.7; }
 .verdict-answer:lang(ar), .captions h2:lang(ar), .card h2:lang(ar), .main h2:lang(ar) { line-height: 1.35; }
 .places strong:lang(ar) { line-height: 1.5; }
 /* There is no Arabic italic: a slanted naskh only looks broken. */

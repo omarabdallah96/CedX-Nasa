@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { RangeSummary } from '../lib/analysis.ts';
 import { useI18n } from '../i18n/index.tsx';
+import { fmtCount } from '../lib/format.ts';
 import { dayIndex, FIRST_DAY, isoDate, parseIsoDate } from '../lib/time.ts';
 import type { Selection } from './FireRings.tsx';
 
@@ -65,7 +66,7 @@ export function PeriodPanel({ period, custom, sel, lastDay, summary, onChange }:
 
   return (
     <fieldset className="period">
-      <legend>{t.period.title}</legend>
+      <legend className="side-h">{t.period.title}</legend>
       <div className="period-inputs">
         {[t.period.from, t.period.to].map((label, i) => (
           <label key={i}>
@@ -99,10 +100,21 @@ export function PeriodPanel({ period, custom, sel, lastDay, summary, onChange }:
           {error === 'both' ? t.period.errBoth : error === 'order' ? t.period.errOrder : t.period.errRange(isoDate(FIRST_DAY), isoDate(lastDay))}
         </p>
       ) : (
-        <p id="period-status" className="period-sum" role="status">
-          <strong>{t.rangeName(period.from, period.to)}</strong>{' '}
-          <span>{t.period.summary(detections, summary.harmonized, t.period.compare(summary.verdict), !custom)}</span>
-        </p>
+        <div id="period-status" className="period-sum" role="status">
+          <p><strong>{t.rangeName(period.from, period.to)}</strong>{!custom && <> · {t.period.follows}</>}</p>
+          <dl className="facts">
+            <dt>{t.facts.detections}</dt>
+            <dd>{fmtCount(detections)}</dd>
+            <dt>{t.facts.cellDays}</dt>
+            <dd>{fmtCount(summary.harmonized)}</dd>
+            {summary.verdict && (
+              <>
+                <dt>{t.facts.vsUsual}</dt>
+                <dd>{t.period.compare(summary.verdict)}</dd>
+              </>
+            )}
+          </dl>
+        </div>
       )}
     </fieldset>
   );

@@ -24,7 +24,7 @@ export function NowCard({ analysis, cal, week, live, shown, onShow }: Props) {
   return (
     <section className="now" aria-labelledby="now-h">
       <div className="now-head">
-        <h2 id="now-h">{t.now.title} <small>{dates} {cal.year[week.to]}</small></h2>
+        <h2 id="now-h" className="side-h">{t.now.title} <small>{dates} {cal.year[week.to]}</small></h2>
         <span className="now-live" data-live={live || undefined}>
           <i aria-hidden="true" /> {live ? t.now.live : t.now.bundled}
         </span>
@@ -34,7 +34,12 @@ export function NowCard({ analysis, cal, week, live, shown, onShow }: Props) {
         {v && <span className="verdict-badge" data-level={v.level}><span aria-hidden="true">{ICON[v.level]}</span> {t.now.badge(v)}</span>}
       </p>
       <p className="now-line">{t.now.line(v)}</p>
-      <p className="note">{t.now.note(t.now.carrier(week.sourceDays), !!analysis.filters.bbox, t.longDate(cal.nDays - 1))}</p>
+      <dl className="facts">
+        <dt>{t.facts.satellite}</dt>
+        <dd>{t.now.carrier(week.sourceDays)}{analysis.filters.bbox && t.now.areaOnly}</dd>
+        <dt>{t.facts.upTo}</dt>
+        <dd>{t.longDate(cal.nDays - 1)}. {t.now.revised}</dd>
+      </dl>
       <button type="button" className="btn btn-quiet" aria-pressed={shown} onClick={onShow}>
         {shown ? t.now.showing : t.now.show}
       </button>

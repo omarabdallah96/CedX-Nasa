@@ -302,7 +302,7 @@ export function App() {
             )}
 
             <form className="area" onSubmit={submitBox} aria-labelledby="area-h">
-              <h2 id="area-h">{t.area.title}</h2>
+              <h2 id="area-h" className="side-h">{t.area.title}</h2>
               <p className="note">{bbox ? t.area.showingDrawn : t.area.showingAll(countryName)}</p>
               <div className="area-actions">
                 <button type="button" className="btn" aria-pressed={drawing} onClick={() => setDrawing((d) => !d)}>
@@ -338,6 +338,7 @@ export function App() {
               ) : (
                 <p id="box-hint" className="note">{t.area.hint}</p>
               )}
+              <h3 className="side-sub">{t.area.filters}</h3>
               <div className="filters">
                 <label>
                   <input type="checkbox" checked={flags.vegOnly} onChange={(e) => setFlags((f) => ({ ...f, vegOnly: e.target.checked }))} />
@@ -358,6 +359,7 @@ export function App() {
                   onChange={setRange}
                 />
               )}
+              <h3 className="side-sub">{t.area.mapKey}</h3>
               <p className="map-key">
                 <span><i className="pt pt-viirs" /> VIIRS</span>
                 <span><i className="pt pt-modis" /> MODIS</span>
@@ -416,6 +418,7 @@ export function App() {
               <section id="trust" aria-labelledby="trust-h">
                 <p className="eyebrow">{t.trust.eyebrow}</p>
                 <h2 id="trust-h">{t.trust.title}</h2>
+                <p className="lede">{t.trust.lede}</p>
                 <TrustPanel
                   analysis={analysis}
                   place={place}

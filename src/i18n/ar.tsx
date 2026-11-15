@@ -167,7 +167,9 @@ export const ar: Strings = {
   },
 
   area: {
-    title: 'المنطقة',
+    title: 'منطقة الخريطة',
+    filters: 'عوامل التصفية',
+    mapKey: 'مفتاح الخريطة',
     showingDrawn: 'تُعرض منطقة مرسومة. معامل تحويلها محسوب محليًا.',
     showingAll: (country) => `تُعرض كامل مساحة ${country ?? 'البلد'}.`,
     cancelDraw: 'إلغاء الرسم',
@@ -202,7 +204,17 @@ export const ar: Strings = {
     footprint: 'الأثر التراكمي لكل السنوات',
   },
 
+  facts: {
+    satellite: 'القمر الصناعي',
+    upTo: 'البيانات حتى',
+    cellDay: `ما هي «${CELL_DAYS}»؟`,
+    cellDayText: `مربع بعرض نحو 1 كم سُجّل فيه حريق في يوم واحد، بوحدات مكافئة لبيانات ${ltr('VIIRS')}.`,
+    detections: 'حالات رصد الحرائق',
+    cellDays: CELL_DAYS,
+    vsUsual: 'مقارنةً بالمعتاد',
+  },
   verdict: {
+    heading: 'هذا الشهر مقارنةً بالمعتاد',
     prevMonth: 'الشهر السابق',
     month: 'الشهر',
     year: 'السنة',
@@ -221,17 +233,15 @@ export const ar: Strings = {
     rankLabel: 'المرتبة',
     rank: (rank) => String(rank),
     rankOf: (n) => ` من ${n}`,
-    rankNote: 'الأكثر نشاطًا أولًا',
-    source: (text) => `مصدر هذا الشهر: ${text}.`,
-    wholeYear: (year, ratio, rank, n) =>
-      ` سنة ${year} كاملةً: ${ratio !== null ? versus(ratio, 'السنة الاعتيادية') : 'لا سنة اعتيادية للمقارنة'}، المرتبة ${rank} من ${n}.`,
+    rankNote: 'الأول = الأكثر حرائق',
+    allOf: (year) => `سنة ${year} كاملةً`,
+    wholeYear: (ratio, rank, n) =>
+      `${ratio !== null ? versus(ratio, 'السنة الاعتيادية') : 'لا سنة اعتيادية للمقارنة'}، المرتبة ${rank} من ${n}`,
     noCoverage: 'لا تغطية من الأقمار الصناعية لهذا الشهر. يبدأ السجل في تشرين الثاني 2000.',
     jumpAria: 'الانتقال إلى شهر',
     latestPeak: 'آخر موسم ذروة',
     mostActive: 'الشهر الأكثر نشاطًا في السجل',
     latest: 'آخر شهر في البيانات',
-    note: (date) =>
-      `البيانات متوفرة حتى ${date}. «${CELL_DAYS}» واحدة هي خلية من الشبكة بعرض نحو 1 كم سُجّل فيها حريق في يوم واحد، بوحدات مكافئة لـVIIRS.`,
   },
 
   now: {
@@ -252,14 +262,14 @@ export const ar: Strings = {
       return `${versus(v.ratio, USUAL_DATES)}؛ ${rankOfYears(v)}.`;
     },
     badge: (v) => (v.level === 'quiet' ? 'هادئ' : v.ratio === null ? 'غير معتاد' : v.ratio > 0.95 && v.ratio < 1.05 ? 'كالمعتاد' : versus(v.ratio, 'المعتاد')),
-    note: (carrier, isArea, date) =>
-      `المصدر: ${carrier}${isArea ? '، في المنطقة المحددة' : ''}. البيانات حتى ${date}؛ الأيام الأحدث شبه آنية وقد تُراجَع لاحقًا.`,
+    areaOnly: ' (المنطقة المحددة فقط)',
+    revised: 'قد تتغير بيانات الأيام الأحدث.',
     showing: 'هذه الأيام السبعة معروضة على الخريطة',
     show: 'اعرض هذه الأيام السبعة على الخريطة',
   },
 
   period: {
-    title: 'الفترة',
+    title: 'التواريخ المعروضة على الخريطة',
     from: 'من',
     to: 'إلى',
     quickAria: 'فترات سريعة',
@@ -278,8 +288,7 @@ export const ar: Strings = {
           : v.ratio === null
             ? `في العادة لا يُسجَّل شيء في هذه التواريخ (المرتبة ${v.rank} من ${v.nYears})`
             : `${versus(v.ratio, USUAL_DATES)} (المرتبة ${v.rank} من ${v.nYears})`,
-    summary: (detections, cd, compare, followsMonth) =>
-      `${count(detections, DETECTIONS, num(detections))} · ${cellDays(cd)}${compare ? ` · ${compare}` : ''}${followsMonth ? ' · تتبع الشهر المحدد' : ''}`,
+    follows: 'تتبع الشهر المحدد أعلاه.',
   },
 
   record: {
@@ -375,13 +384,15 @@ export const ar: Strings = {
   },
 
   trust: {
-    eyebrow: 'الأدلة',
-    title: 'هل يمكن الوثوق بهذا الوصل؟',
-    monthlyError: 'الخطأ الشهري',
-    yearlyError: 'الخطأ السنوي',
-    bias: 'الانحياز',
-    conversion: 'التحويل',
-    rawRecord: (shown) => `السجل الخام: ${shown}`,
+    eyebrow: 'جودة البيانات',
+    title: 'ما مدى دقة السجل الموحَّد',
+    lede:
+      'قبل 2012 كانت مستشعرات MODIS الأقدم وحدها تراقب، ومنذ ذلك الحين يراقب معها مستشعر VIIRS الأدق. تُحوَّل أرقام MODIS إلى وحدات VIIRS لتصبح السنوات كلها قابلة للمقارنة. تُظهر الأرقام أدناه مدى قرب هذا التحويل من الواقع حين يُختبر على سنوات نعرف فيها ما رصده VIIRS فعلًا.',
+    monthlyError: 'الخطأ المعتاد شهريًا',
+    yearlyError: 'الخطأ المعتاد سنويًا',
+    bias: 'زيادة أو نقص في العدّ',
+    conversion: 'معامل التحويل',
+    rawRecord: (shown) => `بلا تحويل: ${shown}`,
     perCellDay: `VIIRS مقابل كل ${CELL_DAYS} من MODIS`,
     note: (o) =>
       `وسيط الخطأ المطلق مقارنةً بـVIIRS في ${count(o.nYears, YEARS)} محجوبة (${o.first}–${o.last})، محسوبًا على ${count(o.nMonths, MONTHS_N)} بلغ كلٌّ منها ${o.minObs} ${CELL_DAYS} على الأقل من VIIRS.` +

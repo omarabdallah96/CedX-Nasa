@@ -82,7 +82,9 @@ export const en = {
   },
 
   area: {
-    title: 'Area',
+    title: 'Map area',
+    filters: 'Filters',
+    mapKey: 'Map key',
     showingDrawn: 'Showing a drawn area. Its conversion factor is fitted locally.',
     showingAll: (country: string | null): string => `Showing all of ${country ?? 'the country'}.`,
     cancelDraw: 'Cancel drawing',
@@ -104,7 +106,18 @@ export const en = {
     footprint: 'all-time footprint',
   },
 
+  /** Labels for the fact rows of the side panel. */
+  facts: {
+    satellite: 'Satellite',
+    upTo: 'Data up to',
+    cellDay: 'What is a cell-day?',
+    cellDayText: 'One ~1 km square where fire was seen on one day, in VIIRS-equivalent units.',
+    detections: 'Fire detections',
+    cellDays: 'Cell-days',
+    vsUsual: 'Compared with usual',
+  },
   verdict: {
+    heading: 'This month vs. the usual',
     prevMonth: 'Previous month',
     month: 'Month',
     year: 'Year',
@@ -127,17 +140,15 @@ export const en = {
     rankLabel: 'Rank',
     rank: (rank: number): string => ordinal(rank),
     rankOf: (n: number): string => ` of ${n}`,
-    rankNote: 'most active first',
-    source: (text: string): string => `Source for this month: ${text}.`,
-    wholeYear: (year: number, ratio: number | null, rank: number, n: number): string =>
-      ` All of ${year}: ${ratio !== null ? `${fmtRatio(ratio)} a typical year` : 'no typical year to compare'}, ${ordinal(rank)} of ${n}.`,
+    rankNote: '1st = most fires',
+    allOf: (year: number): string => `All of ${year}`,
+    wholeYear: (ratio: number | null, rank: number, n: number): string =>
+      `${ratio !== null ? `${fmtRatio(ratio)} a typical year` : 'no typical year to compare'}, ${ordinal(rank)} of ${n}`,
     noCoverage: 'No satellite coverage for this month. The record starts in November 2000.',
     jumpAria: 'Jump to a month',
     latestPeak: 'Latest peak season',
     mostActive: 'Most active month on record',
     latest: 'Latest month in the data',
-    note: (date: string): string =>
-      `Data runs through ${date}. One cell-day is a ~1 km grid cell with fire on one day, in VIIRS-equivalent units.`,
   },
 
   now: {
@@ -167,14 +178,14 @@ export const en = {
             : v.ratio <= 0.95
               ? `${Math.round(v.ratio * 100)}% of usual`
               : 'As usual',
-    note: (carrier: string, isArea: boolean, date: string): string =>
-      `Carried by ${carrier}${isArea ? ', in the selected area' : ''}. Data through ${date}; the newest days are near-real-time and can still be revised.`,
+    areaOnly: ' (selected area only)',
+    revised: 'The newest days may still change.',
     showing: 'Showing these 7 days on the map',
     show: 'Show these 7 days on the map',
   },
 
   period: {
-    title: 'Period',
+    title: 'Dates shown on the map',
     from: 'From',
     to: 'To',
     quickAria: 'Quick periods',
@@ -193,8 +204,7 @@ export const en = {
           : v.ratio === null
             ? `these dates usually see none (${ordinal(v.rank)} of ${v.nYears})`
             : `${versusDates(v, 'level with')} (${ordinal(v.rank)} of ${v.nYears})`,
-    summary: (detections: number, cellDays: number, compare: string, followsMonth: boolean): string =>
-      `${num(detections)} detections · ${fmtCount(cellDays)} cell-days${compare ? ` · ${compare}` : ''}${followsMonth ? ' · follows the selected month' : ''}`,
+    follows: 'Follows the month picked above.',
   },
 
   record: {
@@ -297,16 +307,18 @@ export const en = {
   },
 
   trust: {
-    eyebrow: 'The evidence',
-    title: 'Can you trust the stitch?',
-    monthlyError: 'Monthly error',
-    yearlyError: 'Yearly error',
-    bias: 'Bias',
-    conversion: 'Conversion',
-    rawRecord: (value: string): string => `raw record: ${value}`,
+    eyebrow: 'Data quality',
+    title: 'How accurate the joined record is',
+    lede:
+      'Before 2012 only the older MODIS sensors watched; since then the sharper VIIRS sensor has too. MODIS counts are converted to VIIRS units so every year compares fairly. The figures below show how close that conversion gets when tested on years where the real VIIRS answer is known.',
+    monthlyError: 'Typical monthly error',
+    yearlyError: 'Typical yearly error',
+    bias: 'Over- or under-count',
+    conversion: 'MODIS → VIIRS factor',
+    rawRecord: (value: string): string => `without conversion: ${value}`,
     perCellDay: 'VIIRS per MODIS cell-day',
     note: (o: { nYears: number; nMonths: number; first: number; last: number; minObs: number; thin: boolean; calibrated: boolean }): string =>
-      `Median absolute error against VIIRS in ${o.nYears} held-out years (${o.first}–${o.last}), over the ${o.nMonths} months with at least ${o.minObs} VIIRS cell-days.` +
+      `Typical (median) error when VIIRS is predicted from MODIS, in ${o.nYears} years the model never saw (${o.first}–${o.last}), over the ${o.nMonths} months with at least ${o.minObs} VIIRS cell-days.` +
       (o.thin ? ' Few busy months here, so treat these figures as rough.' : '') +
       (o.calibrated ? '' : ' No overlap data in this area: values before 2012 are unscaled MODIS.'),
     legendAria: 'Legend',
@@ -336,7 +348,7 @@ export const en = {
     tipRatio: (month: string, ratio: number): string => `${month}: ×${ratio.toFixed(2)}`,
     tipSpread: (lo: number, hi: number): string => `Year-to-year range: ×${lo.toFixed(2)}–×${hi.toFixed(2)}`,
     tipFitted: (cellDays: number): string => `Fitted on ${fmtCount(cellDays)} MODIS cell-days`,
-    howTitle: 'How the two records were stitched',
+    howTitle: 'How the two records were joined',
     steps: (o: { cellDeg: number; place: string; isArea: boolean; kappa: number; terra: number }): ReactNode[] => [
       <>
         <strong>One unit.</strong> Every detection is snapped to a {o.cellDeg}° grid (about 1 km). A cell counts once per day
